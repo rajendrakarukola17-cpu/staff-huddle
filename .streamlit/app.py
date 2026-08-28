@@ -8,7 +8,7 @@ from supabase import create_client, Client
 from streamlit_cookies_controller import CookieController
 
 # ============================================================
-# RTA VIZAG STAFF HUDDLE — POLISHED BUILD
+# RTA VIZAG STAFF HUDDLE — APPLE GLASS BUILD (final UI push)
 # ============================================================
 
 st.set_page_config(
@@ -20,248 +20,237 @@ st.set_page_config(
 
 CUSTOM_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-:root {
-    --navy-900: #1E3A5F;
-    --navy-700: #2C5282;
-    --bg-canvas: #EEF1F8;
-    --surface-white: #FFFFFF;
-    --border-subtle: #E2E8F0;
-    --text-primary: #1A202C;
-    --text-secondary: #4A5568;
-    --text-muted: #718096;
-    --success: #10B981;
-    --warning: #F59E0B;
-    --danger: #EF4444;
-    --shadow-soft: 0 8px 24px rgba(30,58,95,0.07);
-    --shadow-md: 0 4px 12px rgba(30,58,95,0.10);
-    --radius-md: 14px;
-    --radius-lg: 18px;
-}
-
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.stApp { background-color: var(--bg-canvas); }
-#MainMenu { visibility: hidden; }
-footer { visibility: hidden; }
-header { visibility: hidden; }
-
-h1, h2, h3 { color: var(--navy-900); font-weight: 700; letter-spacing: -0.02em; }
-
-/* ---------- PILL BUTTONS (like the mockups) ---------- */
-.stButton > button {
-    border-radius: 999px !important;
-    font-weight: 600;
-    border: 1px solid var(--border-subtle);
-    background: var(--surface-white);
-    color: var(--navy-900);
-    transition: all 0.2s ease;
-}
-.stButton > button:hover {
-    border-color: var(--navy-700);
-    box-shadow: var(--shadow-md);
-    transform: translateY(-1px);
-}
-.stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, var(--navy-900), var(--navy-700)) !important;
-    color: white !important;
-    border: none !important;
-    box-shadow: 0 6px 16px rgba(30,58,95,0.25);
-}
-.stButton > button[kind="primary"]:hover {
-    box-shadow: 0 10px 24px rgba(30,58,95,0.35);
+:root{
+  --glass: rgba(255,255,255,0.55);
+  --glass-strong: rgba(255,255,255,0.75);
+  --glass-dark: rgba(20,26,42,0.72);
+  --hairline: rgba(255,255,255,0.65);
+  --hairline-dark: rgba(255,255,255,0.14);
+  --blur: blur(24px) saturate(180%);
+  --navy-900:#1E3A5F;
+  --navy-700:#2C5282;
+  --blue:#0A84FF;
+  --text:#1D1D1F;
+  --muted:#6E6E73;
+  --r-lg:24px; --r-md:18px; --r-sm:12px;
+  --shadow: 0 8px 32px rgba(31,38,135,0.10);
+  --shadow-lg: 0 20px 50px rgba(0,0,0,0.18);
 }
 
-/* ---------- SIDEBAR: clean nav, NO radio circles ---------- */
-section[data-testid="stSidebar"] {
-    background-color: var(--surface-white);
-    border-right: 1px solid var(--border-subtle);
-}
-section[data-testid="stSidebar"] div[role="radio"] { display: none; }
-section[data-testid="stSidebar"] .stRadio > div > label {
-    padding: 0.65rem 1rem;
-    border-radius: 12px;
-    margin-bottom: 3px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    transition: all 0.2s ease;
-}
-section[data-testid="stSidebar"] .stRadio > div > label:hover {
-    background: var(--bg-canvas);
-    color: var(--navy-900);
-}
-section[data-testid="stSidebar"] .stRadio > div > label:has(div[aria-checked="true"]) {
-    background: linear-gradient(135deg, var(--navy-900), var(--navy-700));
-    color: white;
-    box-shadow: 0 4px 12px rgba(30,58,95,0.25);
-}
-section[data-testid="stSidebar"] .stRadio > div > label p { color: inherit; }
+html,body{ background:#F5F5F7; }
+html,body,[class*="css"]{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
 
-.user-profile-card {
-    background: linear-gradient(135deg, var(--navy-900), var(--navy-700));
-    padding: 1.25rem;
-    border-radius: var(--radius-lg);
-    margin-bottom: 1rem;
-    color: white;
-    box-shadow: 0 8px 20px rgba(30,58,95,0.25);
-}
-.user-profile-card h3 { color: white !important; margin: 0 0 0.25rem 0; font-size: 1rem; }
-.user-profile-card p { color: rgba(255,255,255,0.8) !important; margin: 0; font-size: 0.8rem; }
-.user-profile-card .doc-tier { background: rgba(255,255,255,0.18) !important; color: white !important; }
-
-/* ---------- SOFT ROUND CARDS ---------- */
-div[data-testid="stVerticalBlockBorderWrapper"] {
-    border-radius: var(--radius-lg) !important;
-    border: 1px solid var(--border-subtle) !important;
-    background: var(--surface-white);
-    box-shadow: var(--shadow-soft);
-    transition: box-shadow 0.2s ease, transform 0.2s ease;
-}
-div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-    box-shadow: var(--shadow-md);
-    transform: translateY(-2px);
+/* Apple-style mesh wallpaper behind all glass */
+.stApp{
+  background:
+    radial-gradient(1100px 700px at 92% -10%, rgba(10,132,255,0.16), transparent 60%),
+    radial-gradient(900px 650px at -10% 25%, rgba(44,82,130,0.15), transparent 60%),
+    radial-gradient(1000px 700px at 50% 115%, rgba(94,92,230,0.10), transparent 60%),
+    #F5F5F7;
+  background-attachment: fixed;
 }
 
-/* ---------- ROUNDED INPUTS ---------- */
+#MainMenu,footer,header{visibility:hidden}
+h1,h2,h3{color:var(--text);font-weight:700;letter-spacing:-0.022em}
+::selection{background:rgba(10,132,255,0.25)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.18);border-radius:8px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- APPLE PILL BUTTONS ---------- */
+.stButton > button{
+  border-radius:980px !important;
+  background:var(--glass-strong);
+  backdrop-filter:blur(12px) saturate(160%);
+  -webkit-backdrop-filter:blur(12px) saturate(160%);
+  border:1px solid rgba(0,0,0,0.06);
+  color:var(--navy-700);
+  font-weight:600;
+  transition:all .18s ease;
+}
+.stButton > button:hover{ background:#fff; box-shadow:0 4px 14px rgba(0,0,0,0.10); }
+.stButton > button:active{ transform:scale(0.98); }
+.stButton > button[kind="primary"]{
+  background:linear-gradient(180deg,var(--navy-700),var(--navy-900)) !important;
+  color:#fff !important; border:none !important;
+  box-shadow:0 6px 18px rgba(30,58,95,0.35);
+}
+.stButton > button[kind="primary"]:hover{ filter:brightness(1.12); }
+
+/* ---------- FROSTED SIDEBAR ---------- */
+section[data-testid="stSidebar"]{
+  background:rgba(255,255,255,0.42) !important;
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border-right:1px solid var(--hairline) !important;
+}
+section[data-testid="stSidebar"] div[role="radio"]{display:none}
+section[data-testid="stSidebar"] .stRadio > div > label{
+  padding:.65rem 1rem;border-radius:var(--r-sm);margin-bottom:3px;
+  font-weight:500;color:var(--text);transition:all .18s ease;
+}
+section[data-testid="stSidebar"] .stRadio > div > label:hover{background:rgba(255,255,255,0.55)}
+section[data-testid="stSidebar"] .stRadio > div > label:has(div[aria-checked="true"]){
+  background:var(--glass-dark);
+  backdrop-filter:blur(16px) saturate(160%);
+  color:#fff; box-shadow:0 6px 18px rgba(0,0,0,0.22);
+}
+section[data-testid="stSidebar"] .stRadio > div > label p{color:inherit}
+
+.user-profile-card{
+  background:var(--glass-dark);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--hairline-dark);
+  border-radius:var(--r-lg);
+  padding:1.25rem; margin-bottom:1rem; color:#fff;
+  box-shadow:var(--shadow-lg);
+}
+.user-profile-card h3{color:#fff !important;margin:0 0 .25rem 0;font-size:1rem}
+.user-profile-card p{color:rgba(255,255,255,.75) !important;margin:0;font-size:.8rem}
+.user-profile-card .doc-tier{background:rgba(255,255,255,.16) !important;color:#fff !important}
+
+/* ---------- GLASS CARDS (everything floats) ---------- */
+div[data-testid="stVerticalBlockBorderWrapper"]{
+  background:var(--glass) !important;
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--hairline) !important;
+  border-radius:var(--r-lg) !important;
+  box-shadow:var(--shadow);
+  transition:transform .2s ease, box-shadow .2s ease;
+}
+div[data-testid="stVerticalBlockBorderWrapper"]:hover{
+  transform:translateY(-2px);
+  box-shadow:0 14px 40px rgba(31,38,135,0.16);
+}
+
+/* ---------- GLASS INPUTS ---------- */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea,
 .stSelectbox > div > div > div,
-.stDateInput > div > div > input {
-    border-radius: 12px !important;
-    border: 1px solid var(--border-subtle) !important;
+.stDateInput > div > div > input{
+  background:rgba(255,255,255,0.65) !important;
+  backdrop-filter:blur(10px);
+  border:1px solid rgba(0,0,0,0.08) !important;
+  border-radius:var(--r-sm) !important;
+  transition:all .18s ease;
 }
 .stTextInput > div > div > input:focus,
-.stTextArea > div > div > textarea:focus {
-    border-color: var(--navy-700) !important;
-    box-shadow: 0 0 0 3px rgba(44,82,130,0.12) !important;
+.stTextArea > div > div > textarea:focus{
+  border-color:var(--blue) !important;
+  box-shadow:0 0 0 4px rgba(10,132,255,0.15) !important;
+  background:#fff !important;
 }
 
-/* ---------- METRIC / KPI ---------- */
-div[data-testid="stMetric"] {
-    background: var(--surface-white);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    padding: 1.25rem;
-    box-shadow: var(--shadow-soft);
+/* ---------- GLASS METRICS ---------- */
+div[data-testid="stMetric"]{
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  border:1px solid var(--hairline);
+  border-radius:var(--r-md);
+  padding:1.25rem; box-shadow:var(--shadow);
 }
 
-/* ---------- PILL TABS ---------- */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 6px;
-    background: var(--surface-white);
-    padding: 5px;
-    border-radius: 999px;
-    border: 1px solid var(--border-subtle);
+/* ---------- APPLE SEGMENTED CONTROL TABS ---------- */
+.stTabs [data-baseweb="tab-list"]{
+  background:rgba(120,120,128,0.14);
+  border-radius:var(--r-sm); padding:2px; gap:2px; border:none;
 }
-.stTabs [data-baseweb="tab"] { border-radius: 999px; font-weight: 500; }
-.stTabs [aria-selected="true"] {
-    background: var(--navy-900) !important;
-    color: white !important;
-    border-radius: 999px !important;
+.stTabs [data-baseweb="tab"]{border-radius:10px;color:var(--text);font-weight:500}
+.stTabs [aria-selected="true"]{
+  background:rgba(255,255,255,0.92) !important;
+  color:var(--text) !important; border-radius:10px !important;
+  box-shadow:0 2px 8px rgba(0,0,0,0.12);
 }
 
 /* ---------- ALERTS / CHAT ---------- */
-div[data-testid="stAlert"] { border-radius: 12px !important; }
-div[data-testid="stChatMessage"] { border-radius: 16px; }
+div[data-testid="stAlert"]{
+  backdrop-filter:blur(14px); border-radius:var(--r-md) !important;
+  border:1px solid var(--hairline) !important;
+}
+div[data-testid="stChatMessage"]{border-radius:var(--r-md)}
 
-/* ---------- HEADER BANNER ---------- */
-.app-header {
-    background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 100%);
-    padding: 2rem 2.25rem;
-    border-radius: var(--radius-lg);
-    margin-bottom: 1.75rem;
-    color: white;
-    box-shadow: 0 12px 28px rgba(30,58,95,0.25);
+/* ---------- DARK-GLASS HERO HEADER ---------- */
+.app-header{
+  background:var(--glass-dark);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--hairline-dark);
+  border-radius:var(--r-lg);
+  padding:2rem 2.25rem; margin-bottom:1.75rem; color:#fff;
+  box-shadow:var(--shadow-lg);
 }
-.app-header h1 { color: white; margin: 0; font-size: 1.75rem; font-weight: 700; }
-.app-header p { color: #CBD9E8; margin: 0.35rem 0 0 0; font-size: 0.95rem; }
+.app-header h1{color:#fff;margin:0;font-size:1.75rem;font-weight:700}
+.app-header p{color:rgba(255,255,255,.7);margin:.35rem 0 0 0;font-size:.95rem}
 
-/* ---------- KPI CARDS ---------- */
-.kpi-card {
-    background: var(--surface-white);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    padding: 1.4rem;
-    position: relative;
-    overflow: hidden;
-    box-shadow: var(--shadow-soft);
+/* ---------- KPI GLASS TILES ---------- */
+.kpi-card{
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--hairline);
+  border-radius:var(--r-lg);
+  padding:1.4rem; box-shadow:var(--shadow);
 }
-.kpi-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 4px;
-    background: linear-gradient(90deg, var(--navy-900), var(--navy-700));
-}
-.kpi-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 0.5rem; }
-.kpi-value { font-size: 1.9rem; font-weight: 700; color: var(--navy-900); }
+.kpi-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:.5rem}
+.kpi-value{font-size:1.9rem;font-weight:800;color:var(--text);letter-spacing:-0.02em}
 
 /* ---------- DOCUMENT CARDS ---------- */
-.doc-card {
-    background: var(--surface-white);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    padding: 1.3rem;
-    margin-bottom: 0.6rem;
-    box-shadow: var(--shadow-soft);
+.doc-card{
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--hairline);
+  border-radius:var(--r-lg);
+  padding:1.3rem; margin-bottom:.6rem; box-shadow:var(--shadow);
 }
-.doc-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.6rem; }
-.doc-ref { font-size: 11px; font-weight: 600; color: var(--navy-700); background: rgba(44,82,130,0.08); padding: 5px 12px; border-radius: 999px; }
-.doc-tier { font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 999px; }
-.doc-tier.basic { background: rgba(16,185,129,0.12); color: var(--success); }
-.doc-tier.pro { background: rgba(44,82,130,0.12); color: var(--navy-700); }
-.doc-tier.max { background: rgba(76,29,149,0.12); color: #4C1D95; }
-.doc-title { font-weight: 700; font-size: 1rem; color: var(--navy-900); margin-bottom: 0.4rem; }
-.doc-meta { display: flex; gap: 1rem; font-size: 12px; color: var(--text-muted); }
+.doc-card-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.6rem}
+.doc-ref{font-size:11px;font-weight:600;color:var(--navy-700);background:rgba(44,82,130,0.10);padding:5px 12px;border-radius:999px}
+.doc-tier{font-size:11px;font-weight:600;padding:5px 12px;border-radius:999px;backdrop-filter:blur(8px)}
+.doc-tier.basic{background:rgba(16,185,129,0.14);color:#0B8A5C}
+.doc-tier.pro{background:rgba(10,132,255,0.14);color:var(--blue)}
+.doc-tier.max{background:rgba(94,92,230,0.14);color:#5E5CE6}
+.doc-title{font-weight:700;font-size:1rem;color:var(--text);margin-bottom:.4rem;letter-spacing:-0.01em}
+.doc-meta{display:flex;gap:1rem;font-size:12px;color:var(--muted)}
 
 /* ---------- TAPAL CARDS ---------- */
-.tapal-card {
-    background: var(--surface-white);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 1rem 1.25rem;
-    margin-bottom: 0.75rem;
-    box-shadow: var(--shadow-soft);
+.tapal-card{
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  border:1px solid var(--hairline);
+  border-radius:var(--r-md);
+  padding:1rem 1.25rem; margin-bottom:.75rem; box-shadow:var(--shadow);
 }
-.tapal-card.inward { border-left: 4px solid var(--navy-700); }
-.tapal-card.outward { border-left: 4px solid var(--success); }
+.tapal-card.inward{border-left:4px solid var(--navy-700)}
+.tapal-card.outward{border-left:4px solid #34C759}
 
-/* ---------- GLASS LOGIN ---------- */
-.login-container {
-    min-height: 70vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(135deg, #0F172A 0%, #1E3A5F 50%, #2C5282 100%);
-    border-radius: var(--radius-lg);
-    position: relative;
-    overflow: hidden;
-    padding: 3rem 1rem;
+/* ---------- GLASS LOGIN OVER WALLPAPER ---------- */
+.login-container{
+  min-height:72vh;
+  display:flex;align-items:center;justify-content:center;
+  background:
+    radial-gradient(900px 600px at 80% 15%, rgba(10,132,255,0.35), transparent 60%),
+    radial-gradient(800px 550px at 12% 85%, rgba(94,92,230,0.30), transparent 60%),
+    radial-gradient(700px 500px at 55% 55%, rgba(44,82,130,0.35), transparent 65%),
+    linear-gradient(160deg,#0B1524,#101B33 55%,#14264A);
+  border-radius:var(--r-lg);
+  position:relative;overflow:hidden;padding:3rem 1rem;
 }
-.login-container::before {
-    content: '';
-    position: absolute;
-    width: 500px; height: 500px;
-    background: radial-gradient(circle, rgba(44,82,130,0.4) 0%, transparent 70%);
-    top: -150px; right: -150px;
-    border-radius: 50%;
+.login-card{
+  position:relative;z-index:10;
+  background:rgba(255,255,255,0.10);
+  backdrop-filter:blur(30px) saturate(180%);
+  -webkit-backdrop-filter:blur(30px) saturate(180%);
+  border:1px solid rgba(255,255,255,0.22);
+  border-radius:28px;
+  padding:2.5rem; width:100%; max-width:440px; text-align:center;
+  box-shadow:0 30px 70px rgba(0,0,0,0.45);
 }
-.login-card {
-    position: relative;
-    z-index: 10;
-    background: rgba(255,255,255,0.08);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
-    border: 1px solid rgba(255,255,255,0.15);
-    border-radius: var(--radius-lg);
-    padding: 2.5rem;
-    width: 100%;
-    max-width: 440px;
-    text-align: center;
-    box-shadow: 0 24px 64px rgba(0,0,0,0.3);
-}
-.login-card h1 { color: white !important; margin: 0.5rem 0; }
-.login-card p { color: rgba(255,255,255,0.7) !important; font-size: 0.9rem; }
+.login-card h1{color:#fff !important;margin:.5rem 0}
+.login-card p{color:rgba(255,255,255,0.72) !important;font-size:.9rem}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -596,7 +585,7 @@ def try_auto_login():
 
 
 # ============================================================
-# LOGIN SCREEN (glass design)
+# LOGIN SCREEN (glass over wallpaper)
 # ============================================================
 def show_login():
     st.markdown(
@@ -852,7 +841,7 @@ def show_dashboard():
                         f"""
                         <div class="tapal-card {dir_class}">
                             <strong>{dir_icon} {r['subject']}</strong><br>
-                            <small style="color:var(--text-muted);">{r['from_to']} · {r['tapal_date']}{f" · Ref: {r['file_ref']}" if r.get('file_ref') else ""}</small>
+                            <small style="color:var(--muted);">{r['from_to']} · {r['tapal_date']}{f" · Ref: {r['file_ref']}" if r.get('file_ref') else ""}</small>
                             {f"<br><small>📝 {r['remarks']}</small>" if r.get('remarks') else ""}
                         </div>
                         """,
