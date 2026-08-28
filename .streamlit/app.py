@@ -8,8 +8,7 @@ from supabase import create_client, Client
 from streamlit_cookies_controller import CookieController
 
 # ============================================================
-# RTA VIZAG STAFF HUDDLE — COMBINED BUILD
-# Fancy UI + R2 storage + AI that reads uploaded circulars
+# RTA VIZAG STAFF HUDDLE — POLISHED BUILD
 # ============================================================
 
 st.set_page_config(
@@ -26,7 +25,7 @@ CUSTOM_CSS = """
 :root {
     --navy-900: #1E3A5F;
     --navy-700: #2C5282;
-    --bg-canvas: #F7F9FB;
+    --bg-canvas: #EEF1F8;
     --surface-white: #FFFFFF;
     --border-subtle: #E2E8F0;
     --text-primary: #1A202C;
@@ -35,11 +34,10 @@ CUSTOM_CSS = """
     --success: #10B981;
     --warning: #F59E0B;
     --danger: #EF4444;
-    --shadow-sm: 0 1px 2px rgba(30,58,95,0.05);
-    --shadow-md: 0 4px 12px rgba(30,58,95,0.08);
-    --radius-sm: 8px;
-    --radius-md: 12px;
-    --radius-lg: 16px;
+    --shadow-soft: 0 8px 24px rgba(30,58,95,0.07);
+    --shadow-md: 0 4px 12px rgba(30,58,95,0.10);
+    --radius-md: 14px;
+    --radius-lg: 18px;
 }
 
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
@@ -48,149 +46,187 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 footer { visibility: hidden; }
 header { visibility: hidden; }
 
-h1, h2, h3 { color: var(--navy-900); font-weight: 700; }
+h1, h2, h3 { color: var(--navy-900); font-weight: 700; letter-spacing: -0.02em; }
 
-/* Header banner */
-.app-header {
-    background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 100%);
-    padding: 1.75rem 2rem;
-    border-radius: var(--radius-lg);
-    margin-bottom: 1.5rem;
-    color: white;
-    box-shadow: var(--shadow-md);
+/* ---------- PILL BUTTONS (like the mockups) ---------- */
+.stButton > button {
+    border-radius: 999px !important;
+    font-weight: 600;
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-white);
+    color: var(--navy-900);
+    transition: all 0.2s ease;
 }
-.app-header h1 { color: white; margin: 0; font-size: 1.7rem; font-weight: 700; }
-.app-header p { color: #CBD9E8; margin: 0.25rem 0 0 0; font-size: 0.95rem; }
+.stButton > button:hover {
+    border-color: var(--navy-700);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, var(--navy-900), var(--navy-700)) !important;
+    color: white !important;
+    border: none !important;
+    box-shadow: 0 6px 16px rgba(30,58,95,0.25);
+}
+.stButton > button[kind="primary"]:hover {
+    box-shadow: 0 10px 24px rgba(30,58,95,0.35);
+}
 
-/* Sidebar */
+/* ---------- SIDEBAR: clean nav, NO radio circles ---------- */
 section[data-testid="stSidebar"] {
     background-color: var(--surface-white);
     border-right: 1px solid var(--border-subtle);
 }
+section[data-testid="stSidebar"] div[role="radio"] { display: none; }
+section[data-testid="stSidebar"] .stRadio > div > label {
+    padding: 0.65rem 1rem;
+    border-radius: 12px;
+    margin-bottom: 3px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+}
+section[data-testid="stSidebar"] .stRadio > div > label:hover {
+    background: var(--bg-canvas);
+    color: var(--navy-900);
+}
+section[data-testid="stSidebar"] .stRadio > div > label:has(div[aria-checked="true"]) {
+    background: linear-gradient(135deg, var(--navy-900), var(--navy-700));
+    color: white;
+    box-shadow: 0 4px 12px rgba(30,58,95,0.25);
+}
+section[data-testid="stSidebar"] .stRadio > div > label p { color: inherit; }
+
 .user-profile-card {
     background: linear-gradient(135deg, var(--navy-900), var(--navy-700));
     padding: 1.25rem;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     margin-bottom: 1rem;
     color: white;
+    box-shadow: 0 8px 20px rgba(30,58,95,0.25);
 }
 .user-profile-card h3 { color: white !important; margin: 0 0 0.25rem 0; font-size: 1rem; }
 .user-profile-card p { color: rgba(255,255,255,0.8) !important; margin: 0; font-size: 0.8rem; }
+.user-profile-card .doc-tier { background: rgba(255,255,255,0.18) !important; color: white !important; }
 
-/* Buttons */
-.stButton > button {
-    border-radius: var(--radius-sm);
-    font-weight: 600;
-    border: 1px solid var(--border-subtle);
-    transition: all 0.2s ease;
-}
-.stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, var(--navy-900), var(--navy-700));
-    color: white;
-    border: none;
-    box-shadow: var(--shadow-md);
-}
-.stButton > button[kind="primary"]:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 8px 20px rgba(30,58,95,0.2);
-}
-
-/* Cards */
+/* ---------- SOFT ROUND CARDS ---------- */
 div[data-testid="stVerticalBlockBorderWrapper"] {
-    border-radius: var(--radius-md) !important;
+    border-radius: var(--radius-lg) !important;
     border: 1px solid var(--border-subtle) !important;
     background: var(--surface-white);
-    box-shadow: var(--shadow-sm);
+    box-shadow: var(--shadow-soft);
     transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 div[data-testid="stVerticalBlockBorderWrapper"]:hover {
     box-shadow: var(--shadow-md);
-    transform: translateY(-1px);
+    transform: translateY(-2px);
 }
 
-/* Metrics */
-div[data-testid="stMetric"] {
-    background: var(--surface-white);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 1rem;
-}
-
-/* Inputs */
+/* ---------- ROUNDED INPUTS ---------- */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea,
-.stSelectbox > div > div > div {
-    border-radius: var(--radius-sm) !important;
+.stSelectbox > div > div > div,
+.stDateInput > div > div > input {
+    border-radius: 12px !important;
     border: 1px solid var(--border-subtle) !important;
 }
 .stTextInput > div > div > input:focus,
 .stTextArea > div > div > textarea:focus {
     border-color: var(--navy-700) !important;
-    box-shadow: 0 0 0 3px rgba(44,82,130,0.1) !important;
+    box-shadow: 0 0 0 3px rgba(44,82,130,0.12) !important;
 }
 
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 8px;
+/* ---------- METRIC / KPI ---------- */
+div[data-testid="stMetric"] {
     background: var(--surface-white);
-    padding: 4px;
-    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem;
+    box-shadow: var(--shadow-soft);
+}
+
+/* ---------- PILL TABS ---------- */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 6px;
+    background: var(--surface-white);
+    padding: 5px;
+    border-radius: 999px;
     border: 1px solid var(--border-subtle);
 }
-.stTabs [data-baseweb="tab"] { border-radius: var(--radius-sm); }
-.stTabs [aria-selected="true"] { background: var(--navy-900) !important; color: white !important; border-radius: var(--radius-sm); }
+.stTabs [data-baseweb="tab"] { border-radius: 999px; font-weight: 500; }
+.stTabs [aria-selected="true"] {
+    background: var(--navy-900) !important;
+    color: white !important;
+    border-radius: 999px !important;
+}
 
-/* Alerts */
-div[data-testid="stAlert"] { border-radius: var(--radius-sm) !important; }
+/* ---------- ALERTS / CHAT ---------- */
+div[data-testid="stAlert"] { border-radius: 12px !important; }
+div[data-testid="stChatMessage"] { border-radius: 16px; }
 
-/* KPI cards */
+/* ---------- HEADER BANNER ---------- */
+.app-header {
+    background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 100%);
+    padding: 2rem 2.25rem;
+    border-radius: var(--radius-lg);
+    margin-bottom: 1.75rem;
+    color: white;
+    box-shadow: 0 12px 28px rgba(30,58,95,0.25);
+}
+.app-header h1 { color: white; margin: 0; font-size: 1.75rem; font-weight: 700; }
+.app-header p { color: #CBD9E8; margin: 0.35rem 0 0 0; font-size: 0.95rem; }
+
+/* ---------- KPI CARDS ---------- */
 .kpi-card {
     background: var(--surface-white);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 1.25rem;
+    border-radius: var(--radius-lg);
+    padding: 1.4rem;
     position: relative;
     overflow: hidden;
+    box-shadow: var(--shadow-soft);
 }
 .kpi-card::before {
     content: '';
     position: absolute;
     top: 0; left: 0; right: 0;
-    height: 3px;
+    height: 4px;
     background: linear-gradient(90deg, var(--navy-900), var(--navy-700));
 }
-.kpi-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.4rem; }
-.kpi-value { font-size: 1.8rem; font-weight: 700; color: var(--navy-900); }
+.kpi-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 0.5rem; }
+.kpi-value { font-size: 1.9rem; font-weight: 700; color: var(--navy-900); }
 
-/* Document cards */
+/* ---------- DOCUMENT CARDS ---------- */
 .doc-card {
     background: var(--surface-white);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 1.25rem;
-    margin-bottom: 0.5rem;
+    border-radius: var(--radius-lg);
+    padding: 1.3rem;
+    margin-bottom: 0.6rem;
+    box-shadow: var(--shadow-soft);
 }
 .doc-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.6rem; }
-.doc-ref { font-size: 11px; font-weight: 600; color: var(--navy-700); background: rgba(44,82,130,0.08); padding: 4px 10px; border-radius: 6px; }
-.doc-tier { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 6px; }
-.doc-tier.basic { background: rgba(16,185,129,0.1); color: var(--success); }
-.doc-tier.pro { background: rgba(44,82,130,0.1); color: var(--navy-700); }
-.doc-tier.max { background: rgba(76,29,149,0.1); color: #4C1D95; }
+.doc-ref { font-size: 11px; font-weight: 600; color: var(--navy-700); background: rgba(44,82,130,0.08); padding: 5px 12px; border-radius: 999px; }
+.doc-tier { font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 999px; }
+.doc-tier.basic { background: rgba(16,185,129,0.12); color: var(--success); }
+.doc-tier.pro { background: rgba(44,82,130,0.12); color: var(--navy-700); }
+.doc-tier.max { background: rgba(76,29,149,0.12); color: #4C1D95; }
 .doc-title { font-weight: 700; font-size: 1rem; color: var(--navy-900); margin-bottom: 0.4rem; }
 .doc-meta { display: flex; gap: 1rem; font-size: 12px; color: var(--text-muted); }
 
-/* Tapal cards */
+/* ---------- TAPAL CARDS ---------- */
 .tapal-card {
     background: var(--surface-white);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     padding: 1rem 1.25rem;
     margin-bottom: 0.75rem;
+    box-shadow: var(--shadow-soft);
 }
-.tapal-card.inward { border-left: 3px solid var(--navy-700); }
-.tapal-card.outward { border-left: 3px solid var(--success); }
+.tapal-card.inward { border-left: 4px solid var(--navy-700); }
+.tapal-card.outward { border-left: 4px solid var(--success); }
 
-/* Login glass */
+/* ---------- GLASS LOGIN ---------- */
 .login-container {
     min-height: 70vh;
     display: flex;
@@ -226,17 +262,6 @@ div[data-testid="stAlert"] { border-radius: var(--radius-sm) !important; }
 }
 .login-card h1 { color: white !important; margin: 0.5rem 0; }
 .login-card p { color: rgba(255,255,255,0.7) !important; font-size: 0.9rem; }
-
-/* Error log */
-.error-log {
-    background: rgba(239,68,68,0.05);
-    border: 1px solid rgba(239,68,68,0.2);
-    border-radius: var(--radius-md);
-    padding: 1rem;
-    font-family: monospace;
-    font-size: 12px;
-    color: var(--danger);
-}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
