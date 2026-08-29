@@ -119,7 +119,6 @@ if "logged_in" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ---------------- AUTH ----------------
 def hash_password(plain): return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 def check_password(plain, hashed):
     try: return bcrypt.checkpw(plain.encode(), hashed.encode())
@@ -171,7 +170,6 @@ def try_auto_login():
         st.session_state.logged_in = True
         st.session_state.user = user
 
-# ---------------- CACHED DATA ----------------
 @st.cache_data(ttl=30)
 def fetch_circulars(): return supabase.table("circulars").select("*").execute().data or []
 @st.cache_data(ttl=30)
@@ -181,7 +179,6 @@ def fetch_tapal(): return supabase.table("tapal_log").select("*").order("tapal_d
 @st.cache_data(ttl=30)
 def fetch_directory(): return supabase.table("directory").select("*").execute().data or []
 
-# ---------------- SETTINGS / ERRORS ----------------
 def get_setting(key, default=""):
     try:
         res = supabase.table("app_settings").select("value").eq("key", key).execute()
@@ -198,7 +195,6 @@ def log_error(area, message):
     try: supabase.table("error_log").insert({"area": area, "message": str(message)[:2000], "occurred_at": datetime.utcnow().isoformat()}).execute()
     except Exception: pass
 
-# ---------------- AI USAGE ----------------
 def log_ai_usage(email):
     today = date.today().isoformat()
     res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", today).execute()
@@ -213,7 +209,6 @@ def get_ai_usage_today(email):
     res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", date.today().isoformat()).execute()
     return res.data[0]["count"] if res.data else 0
 
-# ---------------- R2 / OCR / AI BRAIN ----------------
 @st.cache_resource
 def get_r2_client():
     import boto3
@@ -318,7 +313,6 @@ def ask_ai(user_prompt, sys_context, provider_override=None, api_key_override=No
         return resp.text, None
     except Exception as e: return None, f"Gemini error: {e}"
 
-# ---------------- LOGIN ----------------
 def show_login():
     st.markdown("""
     <div class="login-shell"><div class="login-panel">
@@ -361,7 +355,6 @@ def show_login():
                 else:
                     st.warning("Please enter your name and email.")
 
-# ---------------- SIDEBAR / TOPBAR ----------------
 def render_sidebar(user):
     with st.sidebar:
         st.markdown('<div class="sidebar-brand"><div class="sidebar-logo">🏛️</div><div><div class="sidebar-brand-title">GovDocs AI</div><div class="sidebar-brand-sub">Government Workspace</div></div></div>', unsafe_allow_html=True)
@@ -376,7 +369,6 @@ def render_sidebar(user):
 def topbar(user):
     st.markdown(f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div><div class="app-topbar-sub">Internal productivity tools · Always verify official rules before action</div></div><div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#64748B;">{tier_badge(user.get("tier","Staff"))}<span>{safe_str(user.get("name"))}</span></div></div>', unsafe_allow_html=True)
 
-# ---------------- PAGES ----------------
 def show_home(user):
     page_header(f"{greeting()}, {user['name'].split()[0]} 👋", "Here's your workspace overview.")
     circ = len(fetch_circulars())
@@ -509,7 +501,7 @@ def show_tapal(user):
         if search: rows = [r for r in rows if search.lower() in str(r).lower()]
         if dfilter != "All": rows = [r for r in rows if r.get("direction") == dfilter]
         st.caption(f"{len(rows)} record(s)")
-       for r in rows:
+        for r in rows:
             inward = r.get("direction") == "Inward"
             cls = "tapal-inward" if inward else "tapal-outward"
             icon = "📥" if inward else "📤"
@@ -783,7 +775,6 @@ def show_admin(user):
                 for e in errs: supabase.table("error_log").delete().eq("id", e["id"]).execute()
                 st.rerun()
 
-# ---------------- ROUTER ----------------
 try_auto_login()
 if not st.session_state.logged_in:
     show_login()
