@@ -77,7 +77,6 @@ hr{border-color:var(--border) !important;}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-st.markdown("<style>header{visibility:visible !important}#MainMenu{visibility:hidden !important}footer{visibility:hidden !important}[data-testid='stSidebarCollapsedControl'],[data-testid='collapsedControl']{visibility:visible !important}</style>", unsafe_allow_html=True)
 
 DAILY_AI_LIMIT = 20
 MAX_UPLOAD_MB = 20
@@ -421,14 +420,40 @@ def ai_call(prompt, context):
     return None, last or "No AI provider configured."
 
 def hide_cloud_chrome():
+    """Hide Streamlit/Streamlit-Cloud chrome (main menu, footer, toolbar,
+    Deploy button, running-status widget, 'Manage app' badge) for non-admin
+    users. Uses real data-testid selectors instead of positioned cover-divs,
+    so nothing leaks from an uncovered corner. The sidebar collapse arrow is
+    deliberately left visible — it's normal nav, not Streamlit branding."""
     st.markdown(
         """
         <style>
-        div.cloud-cover-top{position:fixed;top:0;right:0;width:380px;height:75px;background:#FFFFFF;z-index:2147483647 !important;}
-        div.cloud-cover-bottom{position:fixed;bottom:0;right:0;width:300px;height:100px;background:#FFFFFF;z-index:2147483647 !important;}
+        #MainMenu{visibility:hidden !important;}
+        footer{visibility:hidden !important;}
+        header{visibility:hidden !important; height:0 !important;}
+        [data-testid="stToolbar"]{visibility:hidden !important; display:none !important;}
+        [data-testid="stDecoration"]{visibility:hidden !important;}
+        [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}
+        [data-testid="stAppDeployButton"]{display:none !important;}
+        .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}
+        [data-testid="collapsedControl"],[data-testid="stSidebarCollapsedControl"]{visibility:visible !important;}
         </style>
-        <div class="cloud-cover-top"></div>
-        <div class="cloud-cover-bottom"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def show_full_chrome():
+    """Admin-only: keep Streamlit's native header/toolbar visible so admins
+    can still reach Deploy/Rerun/Settings/'Manage app' for debugging."""
+    st.markdown(
+        """
+        <style>
+        #MainMenu{visibility:visible !important;}
+        footer{visibility:hidden !important;}
+        header{visibility:visible !important;}
+        [data-testid="stToolbar"]{visibility:visible !important; display:flex !important;}
+        [data-testid="stStatusWidget"]{visibility:visible !important; display:flex !important;}
+        </style>
         """,
         unsafe_allow_html=True,
     )
@@ -474,7 +499,10 @@ def show_login():
                     st.warning("This email already has an account — use Sign In.")
                 else:
                     ok, err = otp_send(ident, channel)
-                    st.success(f"OTP sent to {ident}.") if ok else st.error(err)
+                    if ok:
+                        st.success(f"OTP sent to {ident}.")
+                    else:
+                        st.error(err)
             code = st.text_input("Enter 6-digit OTP", max_chars=6)
             if st.button("Verify OTP", use_container_width=True):
                 ok, err = otp_verify(ident, channel, code)
@@ -1036,7 +1064,9 @@ if not st.session_state.logged_in:
     show_login()
 else:
     user = st.session_state.user
-    if user.get("tier") != "Admin":
+    if user.get("tier") == "Admin":
+        show_full_chrome()
+    else:
         hide_cloud_chrome()
     menu = render_sidebar(user)
     topbar(user)
