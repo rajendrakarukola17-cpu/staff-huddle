@@ -1186,6 +1186,7 @@ else:
         show_welcome(user)
         st.stop()
     menu = render_sidebar(user)
+     persist_session_cookie()
     topbar(user)
     if menu == "🏠 Dashboard": show_home(user)
     elif menu == "📢 Circulars & G.O.s": show_circulars(user)
