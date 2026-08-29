@@ -452,44 +452,78 @@ def show_circulars(user):
 def show_ai(user):
     page_header("AI Rules Assistant", "Ask about leave, TA/DA, service rules and indexed office circulars.")
     used = get_ai_usage_today(user["email"])
+    admin_provider = get_setting("ai_provider", "gemini").lower()
+    default_idx = ["gemini", "groq", "qwen"].index(admin_provider) if admin_provider in ["gemini", "groq", "qwen"] else 0
     with st.container(border=True):
         c1, c2, c3 = st.columns([1.1, 1.9, 1])
-        with c1: provider = st.selectbox("Model", ["Gemini", "Groq", "Qwen"], key="ai_provider_ui")
-        with c2: custom_key = st.text_input("Custom API key (optional)", type="password", placeholder="Leave blank for system key")
-        with c3: st.markdown(f"<div style='padding-top:29px;text-align:right;color:#64748B;font-size:11px;'>Used: <b>{used}/{DAILY_AI_LIMIT}</b></div>", unsafe_allow_html=True)
+        with c1:
+            provider = st.selectbox("Model", ["Gemini", "Groq", "Qwen"], index=default_idx, key="ai_provider_ui")
+        with c2:
+            custom_key = st.text_input("Custom API key (optional)", type="password", placeholder="Power-user key; leave blank for system key")
+        with c3:
+            st.markdown(f"<div style='padding-top:29px;text-align:right;color:#64748B;font-size:11px;'>AI queries used: <b>{used}/{DAILY_AI_LIMIT}</b></div>", unsafe_allow_html=True)
     if st.session_state.messages:
         for m in st.session_state.messages:
-            with st.chat_message(m["role"]): st.markdown(m["content"])
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
     else:
         with st.container(border=True):
             st.markdown("**Try asking:**")
-            st.markdown("- What are the rules for earned leave?\n- Which circular covers the latest TA/DA revision?")
+            st.markdown("- What are the rules for earned leave?\n- Which circular covers the latest TA/DA revision?\n- What documents are required for this process?")
     if used >= DAILY_AI_LIMIT:
-        st.warning("Daily AI limit reached. Try again tomorrow."); return
+        st.warning("Daily AI limit reached. Try again tomorrow or ask an administrator about your plan limit.")
+        return
     user_input = st.chat_input("Ask about rules, circulars, policies or office procedures...")
-    if not user_input: return
+    if not user_input:
+        return
     st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"): st.markdown(user_input)
+    with st.chat_message("user"):
+        st.markdown(user_input)
+    provider_code = provider.lower()
+    smalltalk = user_input.strip().lower().rstrip("!., ") in {
+        "hi", "hello", "hey", "namaste", "good morning", "good afternoon",
+        "good evening", "thanks", "thank you", "ok", "okay", "test",
+    }
     with st.chat_message("assistant"):
-        sources = search_uploaded_circulars(user_input, 4)
+        sources = [] if smalltalk else search_uploaded_circulars(user_input, limit=4)
+        base_rules = (
+            "You are an internal staff knowledge assistant for a state transport department office. "
+            "BEHAVIOUR RULES: "
+            "(1) If the user's message is only a greeting or small talk (hi, hello, good morning, thanks, ok), reply with a warm 1-2 line greeting and suggest 2-3 example questions they can ask. Do NOT say 'Not found in the uploaded circulars' for greetings. "
+            "(2) Keep answers concise (about 150 words max) unless the user asks for detail. "
+            "(3) Never invent G.O. or circular numbers. "
+            "(4) End rule-answers with one line reminding the user to confirm against the current G.O. or establishment section. "
+        )
         if sources:
-            src = "".join(f"\n--- Source {i}: {s.get('ref_id')} — {s.get('title')} ---\n{s.get('content','')}\n" for i, s in enumerate(sources, 1))
-            sys_context = ("You are an internal staff knowledge assistant for a state transport department office. Use the OFFICE CIRCULAR EXCERPTS below as your PRIMARY source. If the answer is in the excerpts, answer from them and quote the reference number. If not, say 'Not found in the uploaded circulars' and give brief general guidance. Never invent G.O. numbers. Always tell the user to confirm against the current G.O.\n\nOFFICE CIRCULAR EXCERPTS:\n" + src)
+            source_text = ""
+            for i, s in enumerate(sources, 1):
+                source_text += f"\n--- Source {i}: {s.get('ref_id')} — {s.get('title')} ---\n{s.get('content','')}\n"
+            sys_context = base_rules + (
+                "Use the OFFICE CIRCULAR EXCERPTS below as your PRIMARY source. "
+                "If the answer is in the excerpts, answer from them and quote the reference number. "
+                "If the answer is NOT in the excerpts, say 'Not found in the uploaded circulars' and then give brief general guidance.\n\n"
+                f"OFFICE CIRCULAR EXCERPTS:\n{source_text}"
+            )
         else:
-            sys_context = ("You are an internal staff knowledge assistant for a state transport department office. No uploaded circulars matched. Start with 'Not found in the uploaded circulars.' Then give brief general guidance. Never invent G.O. numbers. Always tell the user to confirm against the current G.O.")
+            sys_context = base_rules + (
+                "No uploaded circulars matched this question. If the user asked a genuine rules or procedure question, "
+                "start your answer with 'Not found in the uploaded circulars.' and then give brief general guidance "
+                "using known Indian state civil-service concepts."
+            )
         with st.spinner("Checking indexed documents and rules..."):
-            reply, err = ask_ai(user_input, sys_context, provider_override=provider.lower(), api_key_override=custom_key.strip() or None)
+            reply, err = ask_ai(user_input, sys_context, provider_override=provider_code, api_key_override=custom_key.strip() or None)
         if err:
             log_error("ai_assistant", err)
             st.error("Couldn't reach the AI engine right now.")
-            st.caption("Admin can inspect Health & Diagnostics for the exact error.")
+            st.caption("An administrator can inspect Admin Command Center → Health & Diagnostics for the exact error.")
         else:
             st.markdown(reply)
             if sources:
                 st.markdown("**📄 Matched circulars**")
-                for s in sources: st.caption(f"• {s.get('ref_id')} — {s.get('title')}")
-            else:
-                st.caption("No matching uploaded circulars — general guidance only.")
+                for s in sources:
+                    st.caption(f"• {s.get('ref_id')} — {s.get('title')}")
+            elif not smalltalk:
+                st.caption("No matching uploaded circulars — answer is based on general guidance.")
             st.session_state.messages.append({"role": "assistant", "content": reply})
             log_ai_usage(user["email"])
 
