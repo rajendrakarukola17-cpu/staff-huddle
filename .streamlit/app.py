@@ -1,7 +1,7 @@
+import gzip
 import io
 import secrets as pysecrets
 from datetime import date, datetime, timedelta
-from typing import Optional
 import bcrypt
 import pandas as pd
 import streamlit as st
@@ -16,7 +16,7 @@ CUSTOM_CSS = r"""
 :root{--navy-900:#16324F;--navy-800:#1E3A5F;--navy-700:#2C5282;--blue:#2563EB;--canvas:#F7F9FB;--surface:#FFF;--border:#E2E8F0;--border-strong:#CBD5E1;--text:#0F172A;--muted:#64748B;--green:#16A34A;--shadow:0 2px 10px rgba(15,23,42,.05);--shadow-md:0 8px 24px rgba(15,23,42,.08);--shadow-lg:0 18px 45px rgba(15,23,42,.12);--radius-lg:16px;--radius-md:12px;}
 html,body,[class*="css"]{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
 body{background:var(--canvas);} .stApp{background:var(--canvas);color:var(--text);}
-#MainMenu,footer,header{visibility:hidden;}
+#MainMenu,footer{visibility:hidden;}
 .block-container{padding-top:1.35rem;padding-bottom:3rem;max-width:1500px;}
 h1,h2,h3,h4{color:var(--text);font-weight:700;letter-spacing:-.025em;}
 p,label,.stMarkdown{color:var(--text);} ::selection{background:#DBEAFE;}
@@ -37,7 +37,6 @@ section[data-testid="stSidebar"] .stRadio>div>label p{color:inherit !important;}
 .app-topbar{display:flex;align-items:center;justify-content:space-between;background:#FFF;border:1px solid var(--border);border-radius:14px;padding:13px 18px;margin-bottom:18px;box-shadow:var(--shadow);}
 .app-topbar-title{font-size:13px;font-weight:700;color:var(--navy-800);} .app-topbar-sub{font-size:11px;color:var(--muted);margin-top:2px;}
 .page-header{margin-bottom:20px;} .page-header h1{margin:0;font-size:27px;} .page-header p{margin:5px 0 0;color:var(--muted);font-size:13px;}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;box-shadow:var(--shadow);}
 .kpi-card{background:#FFF;border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow);min-height:112px;}
 .kpi-label{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
 .kpi-value{color:var(--text);font-size:25px;font-weight:800;margin-top:8px;}
@@ -86,7 +85,6 @@ hr{border-color:var(--border) !important;}
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 st.markdown("<style>header{visibility:visible !important}#MainMenu{visibility:hidden !important}footer{visibility:hidden !important}header [data-testid='stSidebarCollapsedControl'],header [data-testid='collapsedControl'],[data-testid='stSidebarCollapsedControl'],[data-testid='collapsedControl']{visibility:visible !important}</style>", unsafe_allow_html=True)
-st.markdown("<style>header [data-testid='stSidebarCollapsedControl'], header [data-testid='collapsedControl'] { visibility: visible !important; }</style>", unsafe_allow_html=True)
 
 DAILY_AI_LIMIT = 20
 MAX_UPLOAD_MB = 20
@@ -121,6 +119,7 @@ if "logged_in" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# ---------------- AUTH ----------------
 def hash_password(plain): return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 def check_password(plain, hashed):
     try: return bcrypt.checkpw(plain.encode(), hashed.encode())
@@ -165,23 +164,14 @@ def clear_session_token(token):
     try: cookies.remove(COOKIE_NAME)
     except Exception: pass
 
-def read_session_cookie():
-    try:
-        return st.context.cookies.get(COOKIE_NAME)
-    except Exception:
-        try:
-            return cookies.get(COOKIE_NAME)
-        except Exception:
-            return None
-
 def try_auto_login():
-    if st.session_state.logged_in:
-        return
+    if st.session_state.logged_in: return
     user = get_user_from_token(read_session_cookie())
     if user:
         st.session_state.logged_in = True
         st.session_state.user = user
 
+# ---------------- CACHED DATA ----------------
 @st.cache_data(ttl=30)
 def fetch_circulars(): return supabase.table("circulars").select("*").execute().data or []
 @st.cache_data(ttl=30)
@@ -191,6 +181,7 @@ def fetch_tapal(): return supabase.table("tapal_log").select("*").order("tapal_d
 @st.cache_data(ttl=30)
 def fetch_directory(): return supabase.table("directory").select("*").execute().data or []
 
+# ---------------- SETTINGS / ERRORS ----------------
 def get_setting(key, default=""):
     try:
         res = supabase.table("app_settings").select("value").eq("key", key).execute()
@@ -207,6 +198,7 @@ def log_error(area, message):
     try: supabase.table("error_log").insert({"area": area, "message": str(message)[:2000], "occurred_at": datetime.utcnow().isoformat()}).execute()
     except Exception: pass
 
+# ---------------- AI USAGE ----------------
 def log_ai_usage(email):
     today = date.today().isoformat()
     res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", today).execute()
@@ -221,22 +213,37 @@ def get_ai_usage_today(email):
     res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", date.today().isoformat()).execute()
     return res.data[0]["count"] if res.data else 0
 
+# ---------------- R2 / OCR / AI BRAIN ----------------
 @st.cache_resource
 def get_r2_client():
     import boto3
     return boto3.client("s3", endpoint_url=f"https://{st.secrets['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
                         aws_access_key_id=st.secrets["R2_ACCESS_KEY_ID"], aws_secret_access_key=st.secrets["R2_SECRET_ACCESS_KEY"], region_name="auto")
 
-def upload_to_r2(file_bytes: bytes, object_name: str) -> str:
+def upload_to_r2(file_bytes, object_name):
     s3 = get_r2_client()
     s3.put_object(
         Bucket=st.secrets.get("R2_BUCKET_NAME", "circulars"),
         Key=object_name,
         Body=file_bytes,
-        ContentType="application/pdf",
+        ContentType="application/gzip" if object_name.endswith(".gz") else "application/pdf",
     )
     pub_url = st.secrets.get("R2_PUBLIC_URL", "")
     return f"{pub_url.rstrip('/')}/{object_name}" if pub_url else object_name
+
+def compress_for_r2(file_bytes):
+    """Lossless: shrink the PDF structure first, then gzip for R2 storage."""
+    return gzip.compress(optimize_pdf(file_bytes), compresslevel=6)
+
+def fetch_and_decompress(url):
+    """Download from R2 and restore the original PDF (works for old raw files too)."""
+    import urllib.request
+    with urllib.request.urlopen(url) as r:
+        data = r.read()
+    try:
+        return gzip.decompress(data)
+    except Exception:
+        return data
 
 def extract_pdf_text(file_bytes):
     import fitz, pytesseract
@@ -298,13 +305,13 @@ def search_uploaded_circulars(question, limit=4):
         return res.data or []
     except Exception as e:
         log_error("ai_search", str(e)); return []
+
 def _call_provider(provider, user_prompt, sys_context, api_key_override=None):
     provider = provider.lower()
     if provider == "groq":
         api_key = api_key_override or get_setting("groq_api_key") or st.secrets.get("GROQ_API_KEY", "")
         model_id = get_setting("groq_model", "llama-3.3-70b-versatile")
-        if not api_key:
-            return None, "no_key"
+        if not api_key: return None, "no_key"
         try:
             from openai import OpenAI
             r = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1").chat.completions.create(
@@ -318,8 +325,7 @@ def _call_provider(provider, user_prompt, sys_context, api_key_override=None):
         api_key = api_key_override or get_setting("qwen_api_key") or st.secrets.get("QWEN_API_KEY", "")
         model_id = get_setting("qwen_model", "qwen-plus")
         base_url = get_setting("qwen_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        if not api_key:
-            return None, "no_key"
+        if not api_key: return None, "no_key"
         try:
             from openai import OpenAI
             r = OpenAI(api_key=api_key, base_url=base_url).chat.completions.create(
@@ -331,16 +337,22 @@ def _call_provider(provider, user_prompt, sys_context, api_key_override=None):
             return None, f"Qwen error: {e}"
     api_key = api_key_override or get_setting("gemini_api_key") or st.secrets.get("GEMINI_API_KEY", "")
     model_id = get_setting("gemini_model", "gemini-2.0-flash")
-    if not api_key:
-        return None, "no_key"
+    if not api_key: return None, "no_key"
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_id)
-        response = model.generate_content(f"{sys_context}\n\nQuestion: {user_prompt}")
-        return response.text, None
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_id)
+            response = model.generate_content(f"{sys_context}\n\nQuestion: {user_prompt}")
+            return response.text, None
+        except ImportError:
+            from google import genai as g2
+            client = g2.Client(api_key=api_key)
+            resp = client.models.generate_content(model=model_id, contents=f"{sys_context}\n\nQuestion: {user_prompt}")
+            return resp.text, None
     except Exception as e:
         return None, f"Gemini error: {e}"
+
 def ask_ai(user_prompt, sys_context, provider_override=None, api_key_override=None):
     primary = (provider_override or get_setting("ai_provider", "gemini")).lower()
     order = [primary] + [p for p in ["groq", "gemini", "qwen"] if p != primary]
@@ -356,6 +368,22 @@ def ask_ai(user_prompt, sys_context, provider_override=None, api_key_override=No
     if last_err and last_err != "no_key":
         return None, last_err
     return None, "No AI provider available. Add an API key in Admin → AI & Gateway Settings."
+
+# ---------------- CLOUD CHROME COVER ----------------
+def hide_cloud_chrome():
+    st.markdown(
+        """
+        <style>
+        div.cloud-cover-top{position:fixed;top:0;right:0;width:340px;height:70px;background:#FFFFFF;z-index:999999;}
+        div.cloud-cover-bottom{position:fixed;bottom:0;right:0;width:240px;height:80px;background:#FFFFFF;z-index:999999;}
+        </style>
+        <div class="cloud-cover-top"></div>
+        <div class="cloud-cover-bottom"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# ---------------- LOGIN ----------------
 def show_login():
     st.markdown("""
     <div class="login-shell"><div class="login-panel">
@@ -398,11 +426,19 @@ def show_login():
                 else:
                     st.warning("Please enter your name and email.")
 
+# ---------------- SIDEBAR / TOPBAR ----------------
 def render_sidebar(user):
     with st.sidebar:
         st.markdown('<div class="sidebar-brand"><div class="sidebar-logo">🏛️</div><div><div class="sidebar-brand-title">GovDocs AI</div><div class="sidebar-brand-sub">Government Workspace</div></div></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="profile-card"><div class="profile-name">{safe_str(user.get("name"))}</div><div class="profile-email">{safe_str(user.get("email"))}</div><div class="profile-role"><span style="font-size:10px;color:#64748B;">Access tier</span>{tier_badge(user.get("tier","Staff"))}</div></div>', unsafe_allow_html=True)
-        menu = st.radio("Navigation", ["🏠 Dashboard", "📢 Circulars & G.O.s", "🤖 AI Rules Assistant", "📝 Templates", "✉️ Tapal Register", "📮 Dispatch Labels", "📞 Staff Directory", "💳 Plans & Billing", "⚙️ Admin Command Center"], label_visibility="collapsed")
+        options = [
+            "🏠 Dashboard", "📢 Circulars & G.O.s", "🤖 AI Rules Assistant",
+            "📝 Templates", "✉️ Tapal Register", "📮 Dispatch Labels",
+            "📞 Staff Directory", "💳 Plans & Billing",
+        ]
+        if user.get("tier") == "Admin":
+            options.append("⚙️ Admin Command Center")
+        menu = st.radio("Navigation", options, label_visibility="collapsed")
         if st.button("🚪 Logout", use_container_width=True):
             clear_session_token(read_session_cookie())
             st.session_state.logged_in = False; st.session_state.user = None; st.session_state.messages = []
@@ -412,6 +448,7 @@ def render_sidebar(user):
 def topbar(user):
     st.markdown(f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div><div class="app-topbar-sub">Internal productivity tools · Always verify official rules before action</div></div><div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#64748B;">{tier_badge(user.get("tier","Staff"))}<span>{safe_str(user.get("name"))}</span></div></div>', unsafe_allow_html=True)
 
+# ---------------- PAGES ----------------
 def show_home(user):
     page_header(f"{greeting()}, {user['name'].split()[0]} 👋", "Here's your workspace overview.")
     circ = len(fetch_circulars())
@@ -457,7 +494,18 @@ def show_circulars(user):
         lock = "" if allowed else "🔒 "
         st.markdown(f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{safe_str(item.get("ref_id"))}</span>{tier_badge(tier)}</div><div class="doc-title">{lock}{safe_str(item.get("title"))}</div><div class="doc-meta"><span>📅 {safe_str(item.get("doc_date"))}</span><span>📁 {safe_str(item.get("category"))}</span><span>📆 {safe_str(item.get("year"))}</span></div></div>', unsafe_allow_html=True)
         if allowed:
-            st.markdown(f"[📥 Open Document]({safe_str(item.get('link'))})")
+            dl_key = f"dl_{item.get('id')}"
+            if st.button("📥 Download PDF", key=dl_key):
+                st.session_state[dl_key] = True
+            if st.session_state.get(dl_key):
+                try:
+                    pdf_bytes = fetch_and_decompress(safe_str(item.get("link")))
+                    fname = safe_str(item.get("ref_id")).replace(" ", "_").replace("/", "-") + ".pdf"
+                    st.download_button("💾 Save PDF to device", pdf_bytes, file_name=fname, mime="application/pdf", key=f"save_{item.get('id')}")
+                    st.caption("Stored compressed in R2 · decompressed on the fly · text brain lives in Supabase.")
+                except Exception as e:
+                    log_error("doc_download", str(e))
+                    st.error("Could not fetch the document. Try again in a moment.")
         else:
             st.button(f"🔒 Upgrade to {tier}", key=f"up_{item.get('id')}", on_click=lambda t=tier: st.session_state.update({"billing_hint": t}))
 
@@ -789,8 +837,8 @@ def show_admin(user):
                         if len(fb) / 1048576 > MAX_UPLOAD_MB: st.error("File too large."); return
                         safe_name = f"{dt.replace('.','').replace(' ','_')}_{rn.strip().replace(' ','_').replace('/','-')}_{dd.isoformat()}.pdf"
                         with st.spinner("Reading PDF (OCR if scanned)..."): text, ocr = extract_pdf_text(fb)
-                        with st.spinner("Uploading to R2..."):
-                            try: final_link = upload_to_r2(optimize_pdf(fb), safe_name)
+                        with st.spinner("Compressing and uploading to R2..."):
+                            try: final_link = upload_to_r2(compress_for_r2(fb), safe_name + ".gz")
                             except Exception as e:
                                 log_error("r2_upload", str(e)); st.error(f"Upload failed: {e}"); final_link = None
                     if final_link:
@@ -852,11 +900,15 @@ def show_admin(user):
                 for e in errs: supabase.table("error_log").delete().eq("id", e["id"]).execute()
                 st.rerun()
 
+# ---------------- ROUTER ----------------
 try_auto_login()
 if not st.session_state.logged_in:
+    hide_cloud_chrome()
     show_login()
 else:
     user = st.session_state.user
+    if user.get("tier") != "Admin":
+        hide_cloud_chrome()
     menu = render_sidebar(user)
     topbar(user)
     if menu == "🏠 Dashboard": show_home(user)
