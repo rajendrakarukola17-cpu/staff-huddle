@@ -429,27 +429,63 @@ def ai_call(prompt, context):
     return None, last or "No AI provider configured."
 
 def hide_cloud_chrome():
-    """Hide Streamlit/Streamlit-Cloud chrome (main menu, footer, toolbar,
-    Deploy button, running-status widget, 'Manage app' badge) for non-admin
-    users. Uses real data-testid selectors instead of positioned cover-divs,
-    so nothing leaks from an uncovered corner. The sidebar collapse arrow is
-    deliberately left visible — it's normal nav, not Streamlit branding."""
+    # 1. Internal CSS (hides elements inside the app iframe)
     st.markdown(
         """
         <style>
-        #MainMenu{visibility:hidden !important;}
-        footer{visibility:hidden !important;}
-        header{visibility:hidden !important; height:0 !important;}
-        [data-testid="stToolbar"]{visibility:hidden !important; display:none !important;}
-        [data-testid="stDecoration"]{visibility:hidden !important;}
-        [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}
-        [data-testid="stAppDeployButton"]{display:none !important;}
-        .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}
-        [data-testid="collapsedControl"],[data-testid="stSidebarCollapsedControl"]{visibility:visible !important;}
+        #MainMenu {visibility: hidden !important;}
+        footer {visibility: hidden !important;}
+        header {visibility: hidden !important; height: 0 !important;}
+        [data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
+        [data-testid="stDecoration"] {visibility: hidden !important;}
+        [data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
+        [data-testid="stAppDeployButton"] {display: none !important;}
+        .viewerBadge_container__1QSob, .viewerBadge_link__1S137, .stAppDeployButton {display: none !important;}
+        /* Keep sidebar collapse arrow visible */
+        [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {visibility: visible !important;}
         </style>
         """,
         unsafe_allow_html=True,
     )
+    
+    # 2. JavaScript to reach into the parent frame (Streamlit Community Cloud wrapper)
+    hide_js = """
+    <script>
+    (function() {
+        function cleanChrome() {
+            try {
+                var p = window.parent.document;
+                // Target the top-right toolbar, status widget, deploy button, badges, and profile avatar
+                var selectors = [
+                    '[data-testid="stToolbar"]',
+                    '[data-testid="stStatusWidget"]',
+                    '[data-testid="stAppDeployButton"]',
+                    '[class*="viewerBadge"]',
+                    '[class*="UserMenu"]',
+                    '[class*="Toolbar"]',
+                    '[class*="DeployButton"]',
+                    '[class*="Profile"]'
+                ];
+                selectors.forEach(function(sel) {
+                    var els = p.querySelectorAll(sel);
+                    els.forEach(function(el) { 
+                        el.style.display = 'none'; 
+                        el.style.visibility = 'hidden';
+                    });
+                });
+            } catch (e) {
+                // Fail silently if cross-origin restrictions apply
+            }
+        }
+        // Run multiple times to catch elements that load asynchronously after the app renders
+        setTimeout(cleanChrome, 500);
+        setTimeout(cleanChrome, 1500);
+        setTimeout(cleanChrome, 3000);
+        setTimeout(cleanChrome, 6000);
+    })();
+    </script>
+    """
+    components.html(hide_js, height=0, width=0)
 
 def show_full_chrome():
     """Admin-only: keep Streamlit's native header/toolbar visible so admins
