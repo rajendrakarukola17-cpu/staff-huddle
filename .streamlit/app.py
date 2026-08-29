@@ -371,16 +371,47 @@ def ask_ai(user_prompt, sys_context, provider_override=None, api_key_override=No
 
 # ---------------- CLOUD CHROME COVER ----------------
 def hide_cloud_chrome():
+    import streamlit.components.v1 as components
     st.markdown(
         """
         <style>
-        div.cloud-cover-top{position:fixed;top:0;right:0;width:380px;height:75px;background:#FFFFFF;z-index:2147483647 !important;pointer-events:auto;}
-        div.cloud-cover-bottom{position:fixed;bottom:0;right:0;width:280px;height:95px;background:#FFFFFF;z-index:2147483647 !important;pointer-events:auto;}
+        div.cloud-cover-top{position:fixed;top:0;right:0;width:380px;height:75px;background:#FFFFFF;z-index:2147483647 !important;}
+        div.cloud-cover-bottom{position:fixed;bottom:0;right:0;width:300px;height:100px;background:#FFFFFF;z-index:2147483647 !important;}
         </style>
         <div class="cloud-cover-top"></div>
         <div class="cloud-cover-bottom"></div>
         """,
         unsafe_allow_html=True,
+    )
+    components.html(
+        """
+        <script>
+        (function(){
+          function clean(){
+            try{
+              var d = window.parent.document;
+              var win = window.parent;
+              var nodes = d.querySelectorAll('body *');
+              for (var i=0;i<nodes.length;i++){
+                var el = nodes[i];
+                var cs = win.getComputedStyle(el);
+                if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+                if (el.closest('header')) continue;
+                if (el.closest('[data-testid="stSidebar"]')) continue;
+                if (el.closest('[data-testid="stMainBlockContainer"]')) continue;
+                if (el.querySelector('[data-testid="stSidebarCollapsedControl"]')) continue;
+                el.style.setProperty('display','none','important');
+              }
+            }catch(e){}
+          }
+          setTimeout(clean, 800);
+          setTimeout(clean, 2500);
+          setTimeout(clean, 6000);
+        })();
+        </script>
+        """,
+        height=1,
+        width=1,
     )
 
 # ---------------- LOGIN ----------------
