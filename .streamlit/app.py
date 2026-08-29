@@ -134,7 +134,6 @@ if "logged_in" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ---------------- AUTH ----------------
 def hash_password(p): return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
 def check_password(p, h):
     try: return bcrypt.checkpw(p.encode(), h.encode())
@@ -193,7 +192,6 @@ def do_login(u, remember=True):
         cookies.set(COOKIE_NAME, create_session_token(u["email"]), max_age=SESSION_DAYS * 24 * 3600)
     st.rerun()
 
-# ---------------- OTP ----------------
 def otp_send(identifier, channel):
     code = f"{secrets.randbelow(1000000):06d}"
     supabase.table("otp_verifications").insert({
@@ -206,7 +204,7 @@ def otp_send(identifier, channel):
         usr = secret("SMTP_USERNAME"); pw = secret("SMTP_PASSWORD")
         sender = secret("SMTP_FROM") or usr
         if not all([host, usr, pw, sender]):
-            return False, "Email OTP is not configured yet. Use the Request Access tab or ask admin to add SMTP secrets."
+            return False, "Email OTP is not configured yet. Use Request Access or ask admin to add SMTP secrets."
         try:
             m = EmailMessage()
             m["Subject"] = "GovDocs AI verification code"
@@ -244,7 +242,6 @@ def otp_verify(identifier, channel, code):
     except Exception as e:
         log_error("otp_verify", repr(e)); return False, "OTP verification failed."
 
-# ---------------- CACHED DATA ----------------
 @st.cache_data(ttl=30)
 def fetch_circulars(): return supabase.table("circulars").select("*").execute().data or []
 @st.cache_data(ttl=30)
@@ -254,7 +251,6 @@ def fetch_tapal(): return supabase.table("tapal_log").select("*").order("tapal_d
 @st.cache_data(ttl=30)
 def fetch_directory(): return supabase.table("directory").select("*").execute().data or []
 
-# ---------------- SETTINGS / ERRORS ----------------
 def get_setting(key, default=""):
     try:
         res = supabase.table("app_settings").select("value").eq("key", key).execute()
@@ -271,7 +267,6 @@ def log_error(area, message):
     try: supabase.table("error_log").insert({"area": area, "message": str(message)[:2000], "occurred_at": datetime.utcnow().isoformat()}).execute()
     except Exception: pass
 
-# ---------------- AI USAGE ----------------
 def log_ai_usage(email):
     today = date.today().isoformat()
     res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", today).execute()
@@ -286,4 +281,675 @@ def get_ai_usage_today(email):
     res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", date.today().isoformat()).execute()
     return res.data[0]["count"] if res.data else 0
 
-# ----------------
+@st.cache_resource
+def get_r2_client():
+    import boto3
+    return boto3.client("s3", endpoint_url=f"https://{st.secrets['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+                        aws_access_key_id=st.secrets["R2_ACCESS_KEY_ID"], aws_secret_access_key=st.secrets["R2_SECRET_ACCESS_KEY"], region_name="auto")
+
+def upload_to_r2(file_bytes, object_name):
+    s3 = get_r2_client()
+    s3.put_object(
+        Bucket=st.secrets.get("R2_BUCKET_NAME", "circulars"),
+        Key=object_name,
+        Body=file_bytes,
+        ContentType="application/gzip" if object_name.endswith(".gz") else "application/pdf",
+    )
+    pub_url = st.secrets.get("R2_PUBLIC_URL", "")
+    return f"{pub_url.rstrip('/')}/{object_name}" if pub_url else object_name
+
+def compress_for_r2(file_bytes):
+    return gzip.compress(optimize_pdf(file_bytes), compresslevel=6)
+
+def fetch_and_decompress(url):
+    import urllib.request
+    with urllib.request.urlopen(url) as r:
+        data = r.read()
+    try: return gzip.decompress(data)
+    except Exception: return data
+
+def extract_pdf_text(file_bytes):
+    import fitz, pytesseract
+    from PIL import Image, ImageEnhance, ImageOps
+    try: doc = fitz.open(stream=file_bytes, filetype="pdf")
+    except Exception as e:
+        log_error("pdf_open", str(e)); return "", False
+    all_text, used_ocr, ocr_done = [], False, 0
+    for pn, page in enumerate(doc):
+        try: page_text = page.get_text().strip()
+        except Exception: page_text = ""
+        if len(page_text) > 40:
+            all_text.append(page_text)
+        else:
+            if ocr_done >= OCR_MAX_PAGES:
+                all_text.append(f"[Page {pn+1}: scanned — OCR limit reached]"); continue
+            try:
+                pix = page.get_pixmap(dpi=200)
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                img = ImageOps.autocontrast(img.convert("L"))
+                img = ImageEnhance.Sharpness(img).enhance(2.0)
+                all_text.append(pytesseract.image_to_string(img, config="--psm 6").strip())
+                used_ocr = True; ocr_done += 1
+            except Exception as e:
+                log_error("pdf_ocr", f"page {pn+1}: {e}"); all_text.append(f"[Page {pn+1}: OCR failed]")
+    doc.close()
+    return "\n".join(all_text).strip(), used_ocr
+
+def optimize_pdf(file_bytes):
+    import fitz
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf"); buf = io.BytesIO()
+        doc.save(buf, garbage=3, deflate=True); doc.close()
+        out = buf.getvalue()
+        return out if len(out) < len(file_bytes) else file_bytes
+    except Exception as e:
+        log_error("pdf_optimize", str(e)); return file_bytes
+
+def chunk_text(text, size=1200):
+    text = text.strip()
+    return [text[i:i+size].strip() for i in range(0, len(text), size) if text[i:i+size].strip()] if text else []
+
+def index_circular_for_ai(circular_id, text):
+    try:
+        supabase.table("circular_chunks").delete().eq("circular_id", circular_id).execute()
+        chunks = chunk_text(text)
+        if not chunks:
+            supabase.table("circulars").update({"ai_indexed": False}).eq("id", circular_id).execute(); return 0
+        for i, ch in enumerate(chunks):
+            supabase.table("circular_chunks").insert({"circular_id": circular_id, "chunk_no": i, "content": ch}).execute()
+        supabase.table("circulars").update({"ai_indexed": True}).eq("id", circular_id).execute()
+        return len(chunks)
+    except Exception as e:
+        log_error("ai_indexing", str(e)); return 0
+
+def search_uploaded_circulars(question, limit=4):
+    try:
+        res = supabase.rpc("search_circular_chunks", {"q": question, "limit_count": limit}).execute()
+        return res.data or []
+    except Exception as e:
+        log_error("ai_search", str(e)); return []
+
+def _call_one(p, key, model, ep, prompt, context):
+    name, kind, dm, de = PROVIDERS.get(p, PROVIDERS["gemini"])
+    if not key: return None, f"{name}: no API key"
+    try:
+        if kind == "gemini":
+            try:
+                from google import genai
+                from google.genai import types
+                c = genai.Client(api_key=key)
+                r = c.models.generate_content(model=model, contents=prompt, config=types.GenerateContentConfig(system_instruction=context, temperature=0.15))
+                return r.text, None
+            except ImportError:
+                import google.generativeai as g2
+                g2.configure(api_key=key)
+                return g2.GenerativeModel(model).generate_content(f"{context}\n\nQuestion: {prompt}").text, None
+        from openai import OpenAI
+        c = OpenAI(api_key=key, base_url=(ep or de).rstrip("/"))
+        r = c.chat.completions.create(model=model, messages=[{"role": "system", "content": context}, {"role": "user", "content": prompt}], temperature=0.15)
+        return r.choices[0].message.content, None
+    except Exception as e:
+        return None, f"{name} error: {e}"
+
+def ai_call(prompt, context):
+    primary = get_setting("ai_provider", "gemini")
+    order = [primary] + [p for p in PROVIDERS if p != primary]
+    last = None
+    for p in order:
+        key = get_setting(f"{p}_api_key") or secret(f"{p.upper()}_API_KEY")
+        if not key:
+            last = f"{PROVIDERS[p][0]}: no API key"; continue
+        model = get_setting(f"{p}_model", PROVIDERS[p][2]) or PROVIDERS[p][2]
+        ep = get_setting(f"{p}_endpoint", PROVIDERS[p][3]) or PROVIDERS[p][3]
+        r, e = _call_one(p, key, model, ep, prompt, context)
+        if r is not None: return r, None
+        last = e; log_error("ai_" + p, e)
+    return None, last or "No AI provider configured."
+
+def hide_cloud_chrome():
+    st.markdown(
+        """
+        <style>
+        div.cloud-cover-top{position:fixed;top:0;right:0;width:380px;height:75px;background:#FFFFFF;z-index:2147483647 !important;}
+        div.cloud-cover-bottom{position:fixed;bottom:0;right:0;width:300px;height:100px;background:#FFFFFF;z-index:2147483647 !important;}
+        </style>
+        <div class="cloud-cover-top"></div>
+        <div class="cloud-cover-bottom"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def show_login():
+    st.markdown("""
+    <div class="login-shell"><div class="login-panel">
+      <div class="login-brand"><div class="login-mark">🏛️</div><h1>GovDocs AI</h1>
+        <p>AI-powered government document workspace for circulars, G.O.s, Tapal, templates and internal rules assistance.</p>
+        <div style="margin-top:25px;font-size:11px;color:rgba(255,255,255,.72);line-height:1.8;"><b style="color:#fff;">Instant staff accounts</b><br>Verify your email or phone with OTP · Basic is free forever · Pro/Max by admin approval</div>
+      </div>
+      <div class="login-form"><h2>Welcome</h2><div class="muted">Sign in, or create your account in 60 seconds.</div></div>
+    </div></div>""", unsafe_allow_html=True)
+    _, c2, _ = st.columns([1, 1.35, 1])
+    with c2:
+        tab_login, tab_signup, tab_request = st.tabs(["Sign In", "Create Account", "Request Access"])
+        with tab_login:
+            email = st.text_input("Email", key="login_email", placeholder="name@department.gov")
+            password = st.text_input("Password", type="password", key="login_pass")
+            remember = st.checkbox("Remember me", value=True)
+            if st.button("Sign In →", use_container_width=True, type="primary"):
+                user = get_user(email.strip().lower())
+                if user and user.get("active", True) is False:
+                    st.error("This account has been deactivated. Contact your administrator.")
+                elif user and check_password(password, user["password_hash"]):
+                    do_login(user, remember)
+                else:
+                    st.error("Invalid email or password.")
+        with tab_signup:
+            st.caption("Verify email or phone, set a password — instant **Basic** account.")
+            ch = st.radio("OTP channel", ["Email OTP", "Phone OTP"], horizontal=True)
+            n = st.text_input("Full Name *")
+            off = st.text_input("Office Name *")
+            dsg = st.text_input("Designation *")
+            ph = st.text_input("Phone Number *")
+            em = st.text_input("Email *")
+            channel = "email" if ch == "Email OTP" else "phone"
+            ident = em.strip().lower() if channel == "email" else ph.strip()
+            if st.button("Send OTP →", use_container_width=True):
+                if not (n.strip() and off.strip() and dsg.strip() and email_ok(em) and phone_ok(ph)):
+                    st.warning("Fill all fields correctly.")
+                elif channel == "email" and get_user(em.strip().lower()):
+                    st.warning("This email already has an account — use Sign In.")
+                else:
+                    ok, err = otp_send(ident, channel)
+                    st.success(f"OTP sent to {ident}.") if ok else st.error(err)
+            code = st.text_input("Enter 6-digit OTP", max_chars=6)
+            if st.button("Verify OTP", use_container_width=True):
+                ok, err = otp_verify(ident, channel, code)
+                st.session_state["otp_ok"] = ok
+                st.session_state["otp_ident"] = ident
+                st.success("Verified ✓ Now set your password below.") if ok else st.error(err)
+            pw = st.text_input("Create Password *", type="password")
+            pw2 = st.text_input("Confirm Password *", type="password")
+            if st.button("Create Account →", use_container_width=True, type="primary"):
+                if not st.session_state.get("otp_ok") or st.session_state.get("otp_ident") != ident:
+                    st.warning("Verify the OTP first.")
+                elif len(pw) < 8 or pw != pw2:
+                    st.warning("Password must be 8+ characters and match.")
+                else:
+                    payload = {"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True,
+                               "office_name": off.strip(), "designation": dsg.strip(), "phone": ph.strip(),
+                               "email_verified": channel == "email", "phone_verified": channel == "phone"}
+                    try:
+                        supabase.table("users").insert(payload).execute()
+                    except Exception:
+                        supabase.table("users").insert({"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True}).execute()
+                    st.session_state["otp_ok"] = False
+                    do_login(get_user(em.strip().lower()))
+        with tab_request:
+            st.info("For Pro/Max or special roles. An administrator reviews every request.")
+            rn = st.text_input("Full Name", key="req_name")
+            re_ = st.text_input("Email", key="req_email")
+            rr = st.text_input("Role / Designation", key="req_role")
+            rd = st.text_input("Department / Office", key="req_department")
+            rnote = st.text_area("Additional note", key="req_note", height=90)
+            if st.button("Submit Request →", use_container_width=True, type="primary"):
+                if rn.strip() and re_.strip():
+                    create_pending_request(rn.strip(), re_.strip().lower(), f"Role: {rr.strip()} | Dept: {rd.strip()} | {rnote.strip()}")
+                    st.success("Request submitted. The administrator will contact you after review.")
+                else:
+                    st.warning("Please enter your name and email.")
+
+def render_sidebar(user):
+    with st.sidebar:
+        st.markdown('<div class="sidebar-brand"><div class="sidebar-logo">🏛️</div><div><div class="sidebar-brand-title">GovDocs AI</div><div class="sidebar-brand-sub">Government Workspace</div></div></div>', unsafe_allow_html=True)
+        office = safe_str(user.get("office_name"))
+        desig = safe_str(user.get("designation"))
+        extra = f"<div class='profile-email'>{office} · {desig}</div>" if (office or desig) else ""
+        st.markdown(f'<div class="profile-card"><div class="profile-name">{safe_str(user.get("name"))}</div><div class="profile-email">{safe_str(user.get("email"))}</div>{extra}<div class="profile-role"><span style="font-size:10px;color:#64748B;">Access tier</span>{tier_badge(user.get("tier","Staff"))}</div></div>', unsafe_allow_html=True)
+        options = [
+            "🏠 Dashboard", "📢 Circulars & G.O.s", "🤖 AI Rules Assistant",
+            "📝 Templates", "✉️ Tapal Register", "📮 Dispatch Labels",
+            "📞 Staff Directory", "💳 Plans & Billing",
+        ]
+        if user.get("tier") == "Admin":
+            options.append("⚙️ Admin Command Center")
+        menu = st.radio("Navigation", options, label_visibility="collapsed")
+        if st.button("🚪 Logout", use_container_width=True):
+            clear_session_token(read_session_cookie())
+            st.session_state.logged_in = False; st.session_state.user = None; st.session_state.messages = []
+            st.rerun()
+    return menu
+
+def topbar(user):
+    st.markdown(f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div><div class="app-topbar-sub">Internal
+    def show_ai(user):
+    page_header("AI Rules Assistant", "Ask about leave, TA/DA, service rules and indexed office circulars.")
+    used = get_ai_usage_today(user["email"])
+    engine = get_setting("ai_provider", "gemini")
+    engine_name = PROVIDERS.get(engine, PROVIDERS["gemini"])[0]
+    admin_provider = engine.lower()
+    default_idx = ["gemini", "groq", "qwen"].index(admin_provider) if admin_provider in ["gemini", "groq", "qwen"] else 0
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1.1, 1.9, 1])
+        with c1:
+            provider = st.selectbox("Model", ["Gemini", "Groq", "Qwen"], index=default_idx, key="ai_provider_ui")
+        with c2:
+            custom_key = st.text_input("Custom API key (optional)", type="password", placeholder="Power-user key; leave blank for system key")
+        with c3:
+            st.markdown(f"<div style='padding-top:29px;text-align:right;color:#64748B;font-size:11px;'>AI queries used: <b>{used}/{DAILY_AI_LIMIT}</b><br>Admin engine: {engine_name}</div>", unsafe_allow_html=True)
+    if st.session_state.messages:
+        for m in st.session_state.messages:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+    else:
+        with st.container(border=True):
+            st.markdown("**Try asking:**")
+            st.markdown("- What are the rules for earned leave?\n- Which circular covers the latest TA/DA revision?\n- What documents are required for this process?")
+    if used >= DAILY_AI_LIMIT:
+        st.warning("Daily AI limit reached. Try again tomorrow or ask an administrator about your plan limit.")
+        return
+    user_input = st.chat_input("Ask about rules, circulars, policies or office procedures...")
+    if not user_input:
+        return
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+    provider_code = provider.lower()
+    smalltalk = user_input.strip().lower().rstrip("!., ") in {
+        "hi", "hello", "hey", "namaste", "good morning", "good afternoon",
+        "good evening", "thanks", "thank you", "ok", "okay", "test",
+    }
+    with st.chat_message("assistant"):
+        sources = [] if smalltalk else search_uploaded_circulars(user_input, limit=4)
+        base_rules = (
+            "You are an internal staff knowledge assistant for a state transport department office. "
+            "BEHAVIOUR RULES: "
+            "(1) If the user's message is only a greeting or small talk (hi, hello, good morning, thanks, ok), reply with a warm 1-2 line greeting and suggest 2-3 example questions they can ask. Do NOT say 'Not found in the uploaded circulars' for greetings. "
+            "(2) Keep answers concise (about 150 words max) unless the user asks for detail. "
+            "(3) Never invent G.O. or circular numbers. "
+            "(4) End rule-answers with one line reminding the user to confirm against the current G.O. or establishment section. "
+        )
+        if sources:
+            source_text = ""
+            for i, s in enumerate(sources, 1):
+                source_text += f"\n--- Source {i}: {s.get('ref_id')} — {s.get('title')} ---\n{s.get('content','')}\n"
+            sys_context = base_rules + (
+                "Use the OFFICE CIRCULAR EXCERPTS below as your PRIMARY source. "
+                "If the answer is in the excerpts, answer from them and quote the reference number. "
+                "If the answer is NOT in the excerpts, say 'Not found in the uploaded circulars' and then give brief general guidance.\n\n"
+                f"OFFICE CIRCULAR EXCERPTS:\n{source_text}"
+            )
+        else:
+            sys_context = base_rules + (
+                "No uploaded circulars matched this question. If the user asked a genuine rules or procedure question, "
+                "start your answer with 'Not found in the uploaded circulars.' and then give brief general guidance "
+                "using known Indian state civil-service concepts."
+            )
+        with st.spinner("Checking indexed documents and rules..."):
+            reply, err = ai_call(user_input, sys_context) if not custom_key.strip() else _call_one(provider_code, custom_key.strip(), get_setting(f"{provider_code}_model", PROVIDERS.get(provider_code, PROVIDERS["gemini"])[2]), get_setting(f"{provider_code}_endpoint", PROVIDERS.get(provider_code, PROVIDERS["gemini"])[3]), user_input, sys_context)
+        if err:
+            log_error("ai_assistant", err)
+            st.error("Couldn't reach the AI engine right now.")
+            st.caption("An administrator can inspect Admin Command Center → Health & Diagnostics for the exact error.")
+        else:
+            st.markdown(reply)
+            if sources:
+                st.markdown("**📄 Matched circulars**")
+                for s in sources:
+                    st.caption(f"• {s.get('ref_id')} — {s.get('title')}")
+            elif not smalltalk:
+                st.caption("No matching uploaded circulars — answer is based on general guidance.")
+            st.session_state.messages.append({"role": "assistant", "content": reply})
+            log_ai_usage(user["email"])
+
+def show_templates(user):
+    page_header("Drafts & Templates", "Pre-approved office formats, organized by access tier.")
+    rows = fetch_templates()
+    if not rows:
+        st.info("No templates available yet. Ask an administrator to publish one."); return
+    for t in rows:
+        tier = t.get("tier", "Basic")
+        allowed = has_access(user.get("tier", "Staff"), tier)
+        st.markdown(f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">Template</span>{tier_badge(tier)}</div><div class="doc-title">{safe_str(t.get("title"))}</div><div class="doc-meta">📝 {safe_str(t.get("description") or "No description")}</div></div>', unsafe_allow_html=True)
+        if allowed and t.get("link"): st.markdown(f"[📥 Download Template]({safe_str(t.get('link'))})")
+        elif not allowed: st.warning(f"🔒 Requires {tier} access or higher")
+
+def show_tapal(user):
+    page_header("Tapal Workspace", "Log, browse and report inward/outward correspondence.")
+    t1, t2, t3 = st.tabs(["➕ New Entry", "📋 Browse", "📊 Monthly Report"])
+    with t1:
+        with st.form("tapal_form", clear_on_submit=True):
+            a, b = st.columns(2)
+            with a:
+                direction = st.selectbox("Direction", ["Inward", "Outward"])
+                tdate = st.date_input("Date", value=date.today(), max_value=date.today())
+                from_to = st.text_input("From / To *")
+            with b:
+                subject = st.text_input("Subject *")
+                file_ref = st.text_input("File / Reference No.")
+                remarks = st.text_area("Remarks", height=85)
+            if st.form_submit_button("Save Entry", type="primary", use_container_width=True):
+                if not from_to.strip() or not subject.strip(): st.warning("From/To and Subject are required.")
+                else:
+                    supabase.table("tapal_log").insert({"direction": direction, "tapal_date": tdate.isoformat(), "from_to": from_to.strip(), "subject": subject.strip(), "file_ref": file_ref.strip() or None, "remarks": remarks.strip() or None, "entered_by": user["email"], "entered_at": datetime.utcnow().isoformat()}).execute()
+                    fetch_tapal.clear(); st.success("Entry saved.")
+    with t2:
+        rows = fetch_tapal()
+        a, b = st.columns([3, 1])
+        with a: search = st.text_input("Search Tapal", placeholder="Search name, subject or reference...", label_visibility="collapsed")
+        with b: dfilter = st.selectbox("Direction", ["All", "Inward", "Outward"], label_visibility="collapsed")
+        if search: rows = [r for r in rows if search.lower() in str(r).lower()]
+        if dfilter != "All": rows = [r for r in rows if r.get("direction") == dfilter]
+        st.caption(f"{len(rows)} record(s)")
+        for r in rows:
+            inward = r.get("direction") == "Inward"
+            cls = "tapal-inward" if inward else "tapal-outward"
+            icon = "📥" if inward else "📤"
+            ref_txt = " · Ref: " + safe_str(r.get("file_ref")) if r.get("file_ref") else ""
+            remarks_txt = ""
+            if r.get("remarks"):
+                remarks_txt = '<br><span style="font-size:10px;color:#64748B;">📝 ' + safe_str(r.get("remarks")) + "</span>"
+            html = (
+                '<div class="tapal-card ' + cls + '">'
+                '<div style="font-weight:700;font-size:13px;">' + icon + " " + safe_str(r.get("subject")) + "</div>"
+                '<div style="font-size:10px;color:#64748B;margin-top:5px;">'
+                + safe_str(r.get("from_to")) + " · " + safe_str(r.get("tapal_date")) + ref_txt
+                + "</div>" + remarks_txt + "</div>"
+            )
+            st.markdown(html, unsafe_allow_html=True)
+    with t3:
+        today = date.today()
+        a, b = st.columns(2)
+        with a: rm = st.selectbox("Month", list(range(1, 13)), index=today.month - 1, format_func=lambda m: date(2000, m, 1).strftime("%B"))
+        with b: ry = st.number_input("Year", min_value=2020, max_value=2100, value=today.year)
+        start = date(int(ry), rm, 1)
+        end = date(int(ry) + (1 if rm == 12 else 0), rm % 12 + 1, 1)
+        res = supabase.table("tapal_log").select("*").gte("tapal_date", start.isoformat()).lt("tapal_date", end.isoformat()).order("tapal_date").execute()
+        df = pd.DataFrame(res.data or [])
+        if df.empty: st.info(f"No entries for {start.strftime('%B %Y')}.")
+        else:
+            a, b, c = st.columns(3)
+            a.metric("Inward", int((df["direction"] == "Inward").sum())); b.metric("Outward", int((df["direction"] == "Outward").sum())); c.metric("Total", len(df))
+            cols = [c_ for c_ in ["tapal_date", "direction", "from_to", "subject", "file_ref", "remarks"] if c_ in df.columns]
+            st.dataframe(df[cols], use_container_width=True, hide_index=True)
+            st.download_button("📥 Download CSV", df.to_csv(index=False).encode(), f"tapal_report_{start:%Y_%m}.csv", "text/csv")
+
+def show_dispatch(user):
+    page_header("Dispatch Label Generator", "Extract an address from a scan/photo and generate print-ready labels.")
+    with st.container(border=True):
+        st.markdown("**1 · Upload address image**")
+        photo = st.file_uploader("Photo or scan", type=["png", "jpg", "jpeg"])
+        if photo is not None:
+            try:
+                import pytesseract
+                from PIL import Image, ImageEnhance, ImageOps
+                img = Image.open(photo)
+                img = ImageOps.exif_transpose(img).convert("L")
+                img = ImageOps.autocontrast(img)
+                img = ImageEnhance.Sharpness(img).enhance(2.0)
+                if img.width < 1500: img = img.resize((1500, int(img.height * 1500 / img.width)))
+                img = img.point(lambda p: 255 if p > 150 else 0)
+                st.text_area("2 · Review extracted address", value=pytesseract.image_to_string(img, config="--psm 6").strip(), height=100, key="ocr_extracted")
+                with st.expander("Preview processed image"): st.image(img, use_container_width=True)
+            except Exception as e:
+                st.warning(f"OCR unavailable or failed: {e}")
+        address_text = st.text_area("3 · Final address *", value=st.session_state.get("ocr_extracted", ""), height=130)
+        a, b, c = st.columns(3)
+        with a: font_size = st.slider("Font size (pt)", 14, 36, 22)
+        with b: env = st.selectbox("Envelope", ["Long Cover (approx 10 x 4.5 in)", "C5 (229 x 162 mm)", "DL (220 x 110 mm)", "Custom"])
+        with c: copies = st.number_input("Copies", 1, 100, 1)
+        presets = {"Long Cover (approx 10 x 4.5 in)": (254, 114), "C5 (229 x 162 mm)": (229, 162), "DL (220 x 110 mm)": (220, 110)}
+        if env == "Custom":
+            x, y = st.columns(2)
+            w = x.number_input("Width (mm)", 50, 400, 220); h = y.number_input("Height (mm)", 50, 400, 110)
+        else: w, h = presets[env]
+        if st.button("🖨️ Generate Label PDF", type="primary", use_container_width=True):
+            if not address_text.strip(): st.warning("Please enter an address."); return
+            try:
+                from reportlab.lib.units import mm
+                from reportlab.pdfgen import canvas
+                buf = io.BytesIO()
+                c = canvas.Canvas(buf, pagesize=(w * mm, h * mm))
+                lines = [ln for ln in address_text.strip().split("\n") if ln.strip()]
+                lh = font_size * 1.4
+                for _ in range(int(copies)):
+                    c.setFont("Helvetica-Bold", font_size)
+                    y = (h * mm + len(lines) * lh) / 2 - lh
+                    for ln in lines:
+                        c.drawString(10 * mm, y, ln); y -= lh
+                    c.showPage()
+                c.save(); buf.seek(0)
+                supabase.table("dispatch_log").insert({"address_text": address_text.strip(), "copies": int(copies), "generated_by": user["email"], "generated_at": datetime.utcnow().isoformat()}).execute()
+                st.success(f"Generated {copies} label(s).")
+                st.download_button("📥 Download Label PDF", buf, "dispatch_labels.pdf", "application/pdf")
+            except Exception as e:
+                st.error(f"Couldn't generate the PDF: {e}")
+
+def show_directory(user):
+    page_header("Staff Directory", "Find contacts across departments and roles.")
+    df = pd.DataFrame(fetch_directory())
+    search = st.text_input("Search directory", placeholder="Search name, division, role or office...")
+    if search and not df.empty:
+        df = df[df.apply(lambda r: search.lower() in " ".join(map(str, r.values)).lower(), axis=1)]
+    if df.empty: st.info("No staff records found."); return
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+def request_upgrade(u, tier):
+    ex = supabase.table("access_requests").select("id").eq("email", u["email"]).eq("requested_tier", tier).eq("status", "pending").execute()
+    if ex.data:
+        st.info("You already have a pending request for this plan.")
+    else:
+        supabase.table("access_requests").insert({"user_id": u.get("id"), "email": u["email"], "requested_tier": tier, "status": "pending"}).execute()
+        st.success("Request sent to admin for approval.")
+
+def show_billing(user):
+    page_header("Plans & Billing", "Choose the workspace level that matches your needs.")
+    cycle = st.radio("Billing cycle", ["Monthly", "Yearly"], horizontal=True, label_visibility="collapsed")
+    yearly = cycle == "Yearly"
+    pro_p = int(get_setting("pro_yearly" if yearly else "pro_monthly", "3588" if yearly else "299"))
+    max_p = int(get_setting("max_yearly" if yearly else "max_monthly", "9588" if yearly else "799"))
+    per = "year" if yearly else "month"
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown('<div class="plan-card"><div class="plan-name">Basic</div><div class="plan-price">₹0 <span class="plan-period">/ month</span></div><div class="plan-description">Essential tools for everyday office work.</div><div class="feature">✓ Standard circular reference</div><div class="feature">✓ Tapal register</div><div class="feature">✓ Directory access</div><div class="feature">✓ Daily rate-limited AI queries</div></div>', unsafe_allow_html=True)
+        st.button("Current plan" if user.get("tier") in ("Basic", "Staff") else "Get Started", disabled=True, use_container_width=True, key="basic_plan")
+    with c2:
+        st.markdown(f'<div class="plan-card featured"><div class="plan-pill">MOST POPULAR</div><div class="plan-name">Pro</div><div class="plan-price">₹{pro_p:,} <span class="plan-period">/ {per}</span></div><div class="plan-description">For professionals that need faster access.</div><div class="feature">✓ Everything in Basic</div><div class="feature">✓ Priority AI access</div><div class="feature">✓ Template downloads</div><div class="feature">✓ Pro-grade circulars</div></div>', unsafe_allow_html=True)
+        if user.get("tier") in ("Basic", "Staff"):
+            if st.button("Request Pro Access", type="primary", use_container_width=True, key="pro_plan"):
+                request_upgrade(user, "Pro"); st.rerun()
+        else:
+            st.button("Current plan", disabled=True, use_container_width=True, key="pro_cur")
+    with c3:
+        st.markdown(f'<div class="plan-card"><div class="plan-name" style="color:#6D28D9;">Max</div><div class="plan-price">₹{max_p:,} <span class="plan-period">/ {per}</span></div><div class="plan-description">Full workspace power for advanced use.</div><div class="feature">✓ Everything in Pro</div><div class="feature">✓ Unlimited archives</div><div class="feature">✓ Priority queue routing</div><div class="feature">✓ Priority support</div></div>', unsafe_allow_html=True)
+        if user.get("tier") in ("Basic", "Staff", "Pro"):
+            if st.button("Request Max Access", type="primary", use_container_width=True, key="max_plan"):
+                request_upgrade(user, "Max"); st.rerun()
+        else:
+            st.button("Current plan", disabled=True, use_container_width=True, key="max_cur")
+
+def show_admin(user):
+    if user.get("tier") != "Admin":
+        st.error("Admin access required."); return
+    page_header("Admin Command Center", "Manage users, publish documents, configure AI and monitor health.")
+    section = st.radio("Admin section", ["👥 Users", "📢 Document Publisher", "🔧 AI & Gateway Settings", "🩺 Health & Diagnostics"], horizontal=True, label_visibility="collapsed")
+    if section == "👥 Users":
+        st.subheader("Pending access requests")
+        res = supabase.table("pending_requests").select("*").eq("status", "pending").execute()
+        if res.data:
+            for r in res.data:
+                with st.container(border=True):
+                    st.markdown(f"**{safe_str(r.get('name'))}** · {safe_str(r.get('email'))}")
+                    st.caption(safe_str(r.get("note")))
+                    a, b, c = st.columns([1.2, .8, .7])
+                    with a: pw = st.text_input("Set password", key=f"pw_{r['id']}", type="password")
+                    with b: tr = st.selectbox("Tier", ["Staff", "Pro", "Max", "Admin"], key=f"tier_{r['id']}")
+                    with c:
+                        if st.button("Approve", key=f"appr_{r['id']}", type="primary"):
+                            if pw:
+                                supabase.table("users").insert({"email": r["email"], "name": r["name"], "password_hash": hash_password(pw), "tier": tr, "active": True}).execute()
+                                supabase.table("pending_requests").update({"status": "approved"}).eq("id", r["id"]).execute()
+                                st.success("Approved."); st.rerun()
+                            else: st.warning("Set a password first.")
+        else: st.caption("No pending requests.")
+        st.subheader("Pro/Max upgrade requests")
+        ups = supabase.table("access_requests").select("*").eq("status", "pending").execute()
+        if ups.data:
+            for r in ups.data:
+                with st.container(border=True):
+                    st.markdown(f"**{safe_str(r.get('email'))}** requests **{safe_str(r.get('requested_tier'))}")
+                    a, b = st.columns(2)
+                    with a:
+                        if st.button("Approve", key=f"up_ok_{r['id']}", type="primary"):
+                            supabase.table("users").update({"tier": r["requested_tier"]}).eq("email", r["email"]).execute()
+                            supabase.table("access_requests").update({"status": "approved", "reviewed_by": user["email"], "reviewed_at": datetime.utcnow().isoformat()}).eq("id", r["id"]).execute()
+                            st.success("Upgraded."); st.rerun()
+                    with b:
+                        if st.button("Reject", key=f"up_no_{r['id']}"):
+                            supabase.table("access_requests").update({"status": "rejected", "reviewed_by": user["email"], "reviewed_at": datetime.utcnow().isoformat()}).eq("id", r["id"]).execute()
+                            st.rerun()
+        else: st.caption("No upgrade requests.")
+        st.divider(); st.subheader("Create user directly")
+        with st.form("create_user_form", clear_on_submit=True):
+            a, b = st.columns(2)
+            with a:
+                cn = st.text_input("Full Name"); ce = st.text_input("Email")
+            with b:
+                cp = st.text_input("Password", type="password"); cr = st.selectbox("Tier", ["Staff", "Pro", "Max", "Admin"])
+            if st.form_submit_button("+ Create Account", type="primary", use_container_width=True):
+                if not (cn.strip() and ce.strip() and cp): st.warning("Name, email and password are required.")
+                elif supabase.table("users").select("id").eq("email", ce.strip().lower()).execute().data: st.warning("Email already exists.")
+                else:
+                    supabase.table("users").insert({"email": ce.strip().lower(), "name": cn.strip(), "password_hash": hash_password(cp), "tier": cr, "active": True}).execute()
+                    st.success("Account created."); st.rerun()
+        st.divider(); st.subheader("User roster")
+        all_users = supabase.table("users").select("*").execute().data or []
+        us = st.text_input("Search users", placeholder="Name or email...")
+        if us: all_users = [u for u in all_users if us.lower() in safe_str(u.get("name")).lower() or us.lower() in safe_str(u.get("email")).lower()]
+        for u in all_users:
+            active = u.get("active", True)
+            with st.container(border=True):
+                a, b, c, d = st.columns([2.2, 1, 1.1, 1])
+                with a:
+                    st.markdown(f"{'🟢' if active else '🔴'} **{safe_str(u.get('name'))}**")
+                    st.caption(safe_str(u.get("email")))
+                with b: st.markdown(tier_badge(u.get("tier", "Staff")), unsafe_allow_html=True)
+                with c:
+                    npw = st.text_input("New password", key=f"rpw_{u['id']}", type="password", label_visibility="collapsed", placeholder="New password")
+                    if st.button("Reset", key=f"rst_{u['id']}"):
+                        if npw: supabase.table("users").update({"password_hash": hash_password(npw)}).eq("id", u["id"]).execute(); st.success("Reset.")
+                        else: st.warning("Enter a password.")
+                with d:
+                    if st.button("Deactivate" if active else "Activate", key=f"tgl_{u['id']}"):
+                        supabase.table("users").update({"active": not active}).eq("id", u["id"]).execute()
+                        if active: supabase.table("sessions").delete().eq("email", u["email"]).execute()
+                        st.rerun()
+    elif section == "📢 Document Publisher":
+        st.subheader("Publish new circular / G.O.")
+        source = st.radio("Document source", ["Upload PDF", "Paste a link"], horizontal=True)
+        with st.form("add_go_form"):
+            a, b = st.columns(2)
+            with a:
+                dt = st.selectbox("Type", ["G.O.", "Memo", "U.O.", "Circular", "Notification", "Office Order", "Letter"])
+                rn = st.text_input("Reference Number *", placeholder="e.g. Ms.No.102")
+                dd = st.date_input("Document Date *", value=date.today(), max_value=date.today())
+            with b:
+                tt = st.text_input("Title / Subject *")
+                cat = st.selectbox("Category", ["Finance / HR", "Operations", "Confidential", "Executive"])
+                tier = st.selectbox("Minimum Tier", ["Basic", "Pro", "Max"])
+            sup_ = st.text_input("Supersedes / Amends")
+            up = st.file_uploader("PDF file (max 20 MB)", type=["pdf"]) if source == "Upload PDF" else None
+            lk = st.text_input("External PDF / Drive URL") if source == "Paste a link" else ""
+            if st.form_submit_button("Publish Document", type="primary", use_container_width=True):
+                ref_id = f"{dt} {rn}".strip()
+                errs = []
+                if not rn.strip(): errs.append("Reference number is required.")
+                if not tt.strip(): errs.append("Title is required.")
+                if supabase.table("circulars").select("id").eq("ref_id", ref_id).execute().data: errs.append(f"'{ref_id}' already exists.")
+                if source == "Upload PDF" and up is None: errs.append("Choose a PDF.")
+                if source == "Paste a link" and not lk.strip(): errs.append("Paste a document link.")
+                if errs:
+                    for e in errs: st.warning(e)
+                else:
+                    final_link = lk.strip(); text = ""; ocr = False
+                    if source == "Upload PDF":
+                        fb = up.read()
+                        if len(fb) / 1048576 > MAX_UPLOAD_MB: st.error("File too large."); return
+                        safe_name = f"{dt.replace('.','').replace(' ','_')}_{rn.strip().replace(' ','_').replace('/','-')}_{dd.isoformat()}.pdf"
+                        with st.spinner("Reading PDF (OCR if scanned)..."): text, ocr = extract_pdf_text(fb)
+                        with st.spinner("Compressing and uploading to R2..."):
+                            try: final_link = upload_to_r2(compress_for_r2(fb), safe_name + ".gz")
+                            except Exception as e:
+                                log_error("r2_upload", str(e)); st.error(f"Upload failed: {e}"); final_link = None
+                    if final_link:
+                        ins = supabase.table("circulars").insert({"ref_id": ref_id, "doc_type": dt, "ref_number": rn.strip(), "doc_date": dd.isoformat(), "title": tt.strip(), "category": cat, "year": dd.year, "tier": tier, "link": final_link, "supersedes": sup_.strip() or None, "uploaded_by": user["email"], "uploaded_at": datetime.utcnow().isoformat()}).execute()
+                        n = index_circular_for_ai(ins.data[0]["id"], text) if text else 0
+                        st.success(f"Published: {ref_id} · AI blocks: {n}" + (" · OCR used" if ocr else ""))
+                        fetch_circulars.clear(); st.rerun()
+    elif section == "🔧 AI & Gateway Settings":
+        st.subheader("AI provider configuration")
+        cur = get_setting("ai_provider", "gemini")
+        prov = st.selectbox("Active provider", list(PROVIDERS.keys()), index=list(PROVIDERS.keys()).index(cur) if cur in PROVIDERS else 0, format_func=lambda x: PROVIDERS[x][0])
+        name, kind, dm, de = PROVIDERS[prov]
+        k = st.text_input(f"{name} API Key", value=get_setting(f"{prov}_api_key"), type="password")
+        m = st.text_input("Model", value=get_setting(f"{prov}_model", dm))
+        ep = st.text_input("Base URL", value=get_setting(f"{prov}_endpoint", de), disabled=(kind == "gemini"))
+        if st.button("Save Gateway", type="primary"):
+            set_setting("ai_provider", prov); set_setting(f"{prov}_api_key", k.strip()); set_setting(f"{prov}_model", m.strip()); set_setting(f"{prov}_endpoint", ep.strip())
+            st.success("Saved. All users now use this engine by default.")
+        if st.button("🧪 Test provider"):
+            r, e = _call_one(prov, k.strip(), m.strip(), ep.strip(), "Reply exactly: AI gateway connection OK", "You are a connection test.")
+            st.error(e) if e else st.success(r)
+        st.divider(); st.subheader("Subscription pricing (₹)")
+        a, b = st.columns(2)
+        with a:
+            pm = st.number_input("Pro Monthly", 0, 100000, int(get_setting("pro_monthly", "299")))
+            py_ = st.number_input("Pro Yearly", 0, 1000000, int(get_setting("pro_yearly", "3588")))
+        with b:
+            mm = st.number_input("Max Monthly", 0, 100000, int(get_setting("max_monthly", "799")))
+            my_ = st.number_input("Max Yearly", 0, 1000000, int(get_setting("max_yearly", "9588")))
+        if st.button("Save Pricing", type="primary"):
+            for kk, vv in [("pro_monthly", pm), ("pro_yearly", py_), ("max_monthly", mm), ("max_yearly", my_)]: set_setting(kk, str(int(vv)))
+            st.success("Pricing saved.")
+    elif section == "🩺 Health & Diagnostics":
+        st.subheader("System health")
+        n_users = len(supabase.table("users").select("id").execute().data or [])
+        n_circ = len(supabase.table("circulars").select("id").execute().data or [])
+        prov = get_setting("ai_provider", "gemini")
+        key_ok = bool(get_setting(f"{prov}_api_key") or secret(f"{prov.upper()}_API_KEY"))
+        a, b, c, d = st.columns(4)
+        a.markdown(f"<div class='kpi-card'><div class='kpi-label'>Total users</div><div class='kpi-value'>{n_users}</div></div>", unsafe_allow_html=True)
+        b.markdown(f"<div class='kpi-card'><div class='kpi-label'>Circulars</div><div class='kpi-value'>{n_circ}</div></div>", unsafe_allow_html=True)
+        c.markdown(f"<div class='kpi-card'><div class='kpi-label'>AI engine</div><div class='kpi-value' style='font-size:20px;'>{PROVIDERS.get(prov, PROVIDERS['gemini'])[0]}</div></div>", unsafe_allow_html=True)
+        d.markdown(f"<div class='kpi-card'><div class='kpi-label'>Status</div><div class='kpi-value' style='font-size:20px;color:{'#15803D' if key_ok else '#B91C1C'};'>{'Healthy' if key_ok else 'Attention'}</div></div>", unsafe_allow_html=True)
+        st.divider(); st.subheader("Recent errors")
+        errs = supabase.table("error_log").select("*").order("occurred_at", desc=True).limit(30).execute().data or []
+        if not errs: st.success("No errors logged. Everything is running clean.")
+        else:
+            for e in errs:
+                with st.container(border=True):
+                    st.markdown(f"**{safe_str(e.get('area'))}** · {safe_str(e.get('occurred_at'))}")
+                    st.code(safe_str(e.get("message")), language=None)
+            if st.button("🗑️ Clear Error Log"):
+                for e in errs: supabase.table("error_log").delete().eq("id", e["id"]).execute()
+                st.rerun()
+
+# ---------------- ROUTER ----------------
+try_auto_login()
+if not st.session_state.logged_in:
+    hide_cloud_chrome()
+    show_login()
+else:
+    user = st.session_state.user
+    if user.get("tier") != "Admin":
+        hide_cloud_chrome()
+    menu = render_sidebar(user)
+    topbar(user)
+    if menu == "🏠 Dashboard": show_home(user)
+    elif menu == "📢 Circulars & G.O.s": show_circulars(user)
+    elif menu == "🤖 AI Rules Assistant": show_ai(user)
+    elif menu == "📝 Templates": show_templates(user)
+    elif menu == "✉️ Tapal Register": show_tapal(user)
+    elif menu == "📮 Dispatch Labels": show_dispatch(user)
+    elif menu == "📞 Staff Directory": show_directory(user)
+    elif menu == "💳 Plans & Billing": show_billing(user)
+    elif menu == "⚙️ Admin Command Center": show_admin(user)
