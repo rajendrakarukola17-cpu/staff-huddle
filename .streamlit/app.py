@@ -163,8 +163,18 @@ def clear_session_token(token):
     try: cookies.remove(COOKIE_NAME)
     except Exception: pass
 
+def read_session_cookie():
+    try:
+        return st.context.cookies.get(COOKIE_NAME)
+    except Exception:
+        try:
+            return cookies.get(COOKIE_NAME)
+        except Exception:
+            return None
+
 def try_auto_login():
-    if st.session_state.logged_in: return
+    if st.session_state.logged_in:
+        return
     user = get_user_from_token(read_session_cookie())
     if user:
         st.session_state.logged_in = True
