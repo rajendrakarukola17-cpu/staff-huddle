@@ -442,25 +442,50 @@ def ai_call(prompt, context):
     return None, last or "No AI provider configured."
 
 def hide_cloud_chrome():
-    # 1. Internal CSS (hides elements inside the app iframe)
     st.markdown(
         """
         <style>
-        #MainMenu {visibility: hidden !important;}
-        footer {visibility: hidden !important;}
-        header {visibility: hidden !important; height: 0 !important;}
-        [data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
-        [data-testid="stDecoration"] {visibility: hidden !important;}
-        [data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
-        [data-testid="stAppDeployButton"] {display: none !important;}
-        .viewerBadge_container__1QSob, .viewerBadge_link__1S137, .stAppDeployButton {display: none !important;}
-        /* Keep sidebar collapse arrow visible */
-        [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {visibility: visible !important;}
+        #MainMenu{visibility:hidden !important;}
+        footer{visibility:hidden !important;}
+        [data-testid="stToolbar"]{display:none !important;}
+        [data-testid="stStatusWidget"]{display:none !important;}
+        [data-testid="stAppDeployButton"]{display:none !important;}
+        [class*="viewerBadge"]{display:none !important;}
+        [data-testid="collapsedControl"],[data-testid="stSidebarCollapsedControl"]{visibility:visible !important;}
         </style>
         """,
         unsafe_allow_html=True,
     )
-    
+    import streamlit.components.v1 as components
+    components.html(
+        """
+        <script>
+        (function(){
+          function kill(){
+            var docs=[document];
+            try{ if(window.parent&&window.parent.document) docs.push(window.parent.document);}catch(e){}
+            try{ if(window.top&&window.top.document) docs.push(window.top.document);}catch(e){}
+            for(var dI=0;dI<docs.length;dI++){
+              var d=docs[dI]; if(!d||!d.body) continue;
+              var nodes=d.querySelectorAll('body *');
+              for(var i=0;i<nodes.length;i++){
+                var el=nodes[i];
+                if(el.closest&&el.closest('#root')) continue;
+                var cs=d.defaultView.getComputedStyle(el);
+                if(cs.position==='fixed'||cs.position==='sticky'){
+                  var t=el.getAttribute?el.getAttribute('data-testid'):'';
+                  if(t==='collapsedControl'||t==='stSidebarCollapsedControl') continue;
+                  el.style.setProperty('display','none','important');
+                }
+              }
+            }
+          }
+          setTimeout(kill,300);setTimeout(kill,1000);setTimeout(kill,2500);setTimeout(kill,5000);setTimeout(kill,9000);
+        })();
+        </script>
+        """,
+        height=0, width=0,
+    )
     # 2. JavaScript to reach into the parent frame (Streamlit Community Cloud wrapper)
     hide_js = """
     <script>
