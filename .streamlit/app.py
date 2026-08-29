@@ -626,7 +626,8 @@ def render_sidebar(user):
             options.append("⚙️ Admin Command Center")
         menu = st.radio("Navigation", options, label_visibility="collapsed")
         if st.button("🚪 Logout", use_container_width=True):
-            clear_session_token(read_session_cookie())
+                       clear_session_token(read_session_cookie())
+            st.session_state.pop("session_token", None)
             st.session_state.logged_in = False; st.session_state.user = None; st.session_state.messages = []
             st.rerun()
     return menu
