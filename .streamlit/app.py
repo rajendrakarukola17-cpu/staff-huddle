@@ -1,4 +1,5 @@
 import gzip
+import html
 import io
 import os
 import re
@@ -107,6 +108,13 @@ def tier_badge(tier):
 
 def safe_str(v):
     return "" if v is None else str(v)
+
+def esc(v):
+    """HTML-escape a value before interpolating it into an unsafe_allow_html=True
+    markdown block. Any field a user can type (name, subject, remarks, title...)
+    must go through this, not safe_str(), when it ends up in raw HTML — otherwise
+    it's a stored-XSS hole. Do NOT use this for URLs/hrefs (it would break them)."""
+    return html.escape(safe_str(v))
 
 def email_ok(x):
     return bool(re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', x or ''))
@@ -251,17 +259,23 @@ def fetch_tapal(): return supabase.table("tapal_log").select("*").order("tapal_d
 @st.cache_data(ttl=30)
 def fetch_directory(): return supabase.table("directory").select("*").execute().data or []
 
-def get_setting(key, default=""):
+@st.cache_data(ttl=30)
+def _fetch_all_settings():
     try:
-        res = supabase.table("app_settings").select("value").eq("key", key).execute()
-        return res.data[0]["value"] if res.data else default
-    except Exception: return default
+        res = supabase.table("app_settings").select("key,value").execute()
+        return {r["key"]: r["value"] for r in (res.data or [])}
+    except Exception:
+        return {}
+
+def get_setting(key, default=""):
+    return _fetch_all_settings().get(key, default)
 
 def set_setting(key, value):
     if supabase.table("app_settings").select("key").eq("key", key).execute().data:
         supabase.table("app_settings").update({"value": value}).eq("key", key).execute()
     else:
         supabase.table("app_settings").insert({"key": key, "value": value}).execute()
+    _fetch_all_settings.clear()  # invalidate cache so the new value is picked up immediately
 
 def log_error(area, message):
     try: supabase.table("error_log").insert({"area": area, "message": str(message)[:2000], "occurred_at": datetime.utcnow().isoformat()}).execute()
@@ -355,8 +369,8 @@ def index_circular_for_ai(circular_id, text):
         chunks = chunk_text(text)
         if not chunks:
             supabase.table("circulars").update({"ai_indexed": False}).eq("id", circular_id).execute(); return 0
-        for i, ch in enumerate(chunks):
-            supabase.table("circular_chunks").insert({"circular_id": circular_id, "chunk_no": i, "content": ch}).execute()
+        rows = [{"circular_id": circular_id, "chunk_no": i, "content": ch} for i, ch in enumerate(chunks)]
+        supabase.table("circular_chunks").insert(rows).execute()  # single batched insert instead of N round-trips
         supabase.table("circulars").update({"ai_indexed": True}).eq("id", circular_id).execute()
         return len(chunks)
     except Exception as e:
@@ -503,8 +517,8 @@ def render_sidebar(user):
         st.markdown('<div class="sidebar-brand"><div class="sidebar-logo">🏛️</div><div><div class="sidebar-brand-title">GovDocs AI</div><div class="sidebar-brand-sub">Government Workspace</div></div></div>', unsafe_allow_html=True)
         office = safe_str(user.get("office_name"))
         desig = safe_str(user.get("designation"))
-        extra = f"<div class='profile-email'>{office} · {desig}</div>" if (office or desig) else ""
-        st.markdown(f'<div class="profile-card"><div class="profile-name">{safe_str(user.get("name"))}</div><div class="profile-email">{safe_str(user.get("email"))}</div>{extra}<div class="profile-role"><span style="font-size:10px;color:#64748B;">Access tier</span>{tier_badge(user.get("tier","Staff"))}</div></div>', unsafe_allow_html=True)
+        extra = f"<div class='profile-email'>{esc(office)} · {esc(desig)}</div>" if (office or desig) else ""
+        st.markdown(f'<div class="profile-card"><div class="profile-name">{esc(user.get("name"))}</div><div class="profile-email">{esc(user.get("email"))}</div>{extra}<div class="profile-role"><span style="font-size:10px;color:#64748B;">Access tier</span>{tier_badge(user.get("tier","Staff"))}</div></div>', unsafe_allow_html=True)
         options = [
             "🏠 Dashboard", "📢 Circulars & G.O.s", "🤖 AI Rules Assistant",
             "📝 Templates", "✉️ Tapal Register", "📮 Dispatch Labels",
@@ -520,69 +534,15 @@ def render_sidebar(user):
     return menu
 
 def topbar(user):
-    st.markdown(f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div><div class="app-topbar-sub">Internal productivity tools · Always verify official rules before action</div></div><div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#64748B;">{tier_badge(user.get("tier","Staff"))}<span>{safe_str(user.get("name"))}</span></div></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div>'
+        f'<div class="app-topbar-sub">Internal · {safe_str(user.get("office_name")) or "GovDocs AI"}</div></div>'
+        f'<div style="text-align:right;"><div class="app-topbar-title">{date.today().strftime("%d %b %Y")}</div>'
+        f'<div class="app-topbar-sub">{esc(user.get("name"))} · {esc(user.get("tier","Staff"))}</div></div></div>',
+        unsafe_allow_html=True,
+    )
 
-def show_home(user):
-    page_header(f"{greeting()}, {user['name'].split()[0]} 👋", "Here's your workspace overview.")
-    circ = len(fetch_circulars())
-    month_start = date.today().replace(day=1).isoformat()
-    tapal = len([r for r in fetch_tapal() if safe_str(r.get("tapal_date")) >= month_start])
-    used = get_ai_usage_today(user["email"])
-    cols = st.columns(4)
-    for col, (label, value, foot) in zip(cols, [("Circulars on file", circ, "Indexed records"), ("Tapal this month", tapal, "Inward + outward"), ("AI queries today", f"{used}/{DAILY_AI_LIMIT}", "Daily allowance"), ("Access tier", user.get("tier", "Staff"), "Workspace level")]):
-        with col:
-            st.markdown(f"<div class='kpi-card'><div class='kpi-label'>{label}</div><div class='kpi-value'>{value}</div><div class='kpi-foot'>{foot}</div></div>", unsafe_allow_html=True)
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    left, right = st.columns([1.55, 1])
-    with left:
-        st.markdown("### Quick access")
-        for icon, t, d in [("📢", "Circulars & G.O.s", "Search references, subjects and departments."), ("🤖", "AI Rules Assistant", "Ask questions against your indexed circulars."), ("✉️", "Tapal Register", "Log and browse correspondence."), ("📝", "Templates", "Access approved office formats.")]:
-            st.markdown(f"<div class='doc-card'><div class='doc-title'>{icon} {t}</div><div class='doc-meta'>{d}</div></div>", unsafe_allow_html=True)
-    with right:
-        st.markdown("### Workspace notes")
-        with st.container(border=True):
-            st.markdown("**AI answers are decision support, not official orders.**")
-            st.caption("Confirm current G.O.s and establishment instructions before official action.")
-            st.markdown("**Document access**")
-            st.caption("Pro and Max records are protected by your account tier.")
-
-def show_circulars(user):
-    page_header("Circulars, G.O.s & Memos", "Search by reference number, subject, category or year.")
-    c1, c2, c3 = st.columns([2.8, 1.1, 1])
-    with c1: query = st.text_input("Search", placeholder="Search by G.O. number, title, subject...", label_visibility="collapsed")
-    with c2: category = st.selectbox("Category", ["All", "Finance / HR", "Operations", "Confidential", "Executive"], label_visibility="collapsed")
-    with c3: year_f = st.selectbox("Year", ["All"] + [str(y) for y in sorted({r.get("year") for r in fetch_circulars() if r.get("year")}, reverse=True)], label_visibility="collapsed")
-    rows = fetch_circulars()
-    if category != "All": rows = [r for r in rows if r.get("category") == category]
-    if year_f != "All": rows = [r for r in rows if safe_str(r.get("year")) == year_f]
-    if query.strip():
-        q = query.lower()
-        rows = [r for r in rows if q in safe_str(r.get("title")).lower() or q in safe_str(r.get("ref_id")).lower() or q in safe_str(r.get("category")).lower()]
-    st.caption(f"{len(rows)} document(s) found")
-    if not rows:
-        st.info("No documents match your filters."); return
-    for item in rows:
-        tier = item.get("tier", "Basic")
-        allowed = has_access(user.get("tier", "Staff"), tier)
-        lock = "" if allowed else "🔒 "
-        st.markdown(f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{safe_str(item.get("ref_id"))}</span>{tier_badge(tier)}</div><div class="doc-title">{lock}{safe_str(item.get("title"))}</div><div class="doc-meta"><span>📅 {safe_str(item.get("doc_date"))}</span><span>📁 {safe_str(item.get("category"))}</span><span>📆 {safe_str(item.get("year"))}</span></div></div>', unsafe_allow_html=True)
-        if allowed:
-            dl_key = f"dl_{item.get('id')}"
-            if st.button("📥 Download PDF", key=dl_key):
-                st.session_state[dl_key] = True
-            if st.session_state.get(dl_key):
-                try:
-                    pdf_bytes = fetch_and_decompress(safe_str(item.get("link")))
-                    fname = safe_str(item.get("ref_id")).replace(" ", "_").replace("/", "-") + ".pdf"
-                    st.download_button("💾 Save PDF to device", pdf_bytes, file_name=fname, mime="application/pdf", key=f"save_{item.get('id')}")
-                    st.caption("Stored compressed in R2 · decompressed on the fly · text brain lives in Supabase.")
-                except Exception as e:
-                    log_error("doc_download", str(e))
-                    st.error("Could not fetch the document. Try again in a moment.")
-        else:
-            st.button(f"🔒 Upgrade to {tier}", key=f"up_{item.get('id')}", on_click=lambda t=tier: st.session_state.update({"billing_hint": t}))
-
-    def show_ai(user):
+def show_ai(user):
     page_header("AI Rules Assistant", "Ask about leave, TA/DA, service rules and indexed office circulars.")
     used = get_ai_usage_today(user["email"])
     engine = get_setting("ai_provider", "gemini")
@@ -662,6 +622,81 @@ def show_circulars(user):
             st.session_state.messages.append({"role": "assistant", "content": reply})
             log_ai_usage(user["email"])
 
+def show_home(user):
+    page_header(f"{greeting()}, {safe_str(user.get('name')).split(' ')[0] or 'there'} 👋", "Here's what's happening in your workspace today.")
+    circulars = fetch_circulars()
+    tapal = fetch_tapal()
+    this_month = date.today().strftime("%Y-%m")
+    tapal_this_month = [r for r in tapal if safe_str(r.get("tapal_date")).startswith(this_month)]
+    used = get_ai_usage_today(user["email"])
+    a, b, c, d = st.columns(4)
+    with a:
+        st.markdown(f"<div class='kpi-card'><div class='kpi-label'>Circulars & G.O.s</div><div class='kpi-value'>{len(circulars)}</div><div class='kpi-foot'>Total published</div></div>", unsafe_allow_html=True)
+    with b:
+        st.markdown(f"<div class='kpi-card'><div class='kpi-label'>Tapal this month</div><div class='kpi-value'>{len(tapal_this_month)}</div><div class='kpi-foot'>{len(tapal)} total logged</div></div>", unsafe_allow_html=True)
+    with c:
+        st.markdown(f"<div class='kpi-card'><div class='kpi-label'>AI queries today</div><div class='kpi-value'>{used}/{DAILY_AI_LIMIT}</div><div class='kpi-foot'>Resets daily</div></div>", unsafe_allow_html=True)
+    with d:
+        st.markdown(f"<div class='kpi-card'><div class='kpi-label'>Your access tier</div><div class='kpi-value' style='font-size:20px;'>{tier_badge(user.get('tier','Staff'))}</div></div>", unsafe_allow_html=True)
+    st.divider()
+    st.subheader("📢 Recently published")
+    recent = sorted(circulars, key=lambda r: safe_str(r.get("uploaded_at")), reverse=True)[:5]
+    if not recent:
+        st.info("No circulars published yet.")
+    else:
+        for c_ in recent:
+            allowed = has_access(user.get("tier", "Staff"), c_.get("tier", "Basic"))
+            st.markdown(
+                f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{esc(c_.get("ref_id"))}</span>{tier_badge(c_.get("tier","Basic"))}</div>'
+                f'<div class="doc-title">{esc(c_.get("title"))}</div>'
+                f'<div class="doc-meta">🗂️ {esc(c_.get("category"))} · 📅 {esc(c_.get("doc_date"))}</div></div>',
+                unsafe_allow_html=True,
+            )
+            if allowed and c_.get("link"):
+                st.markdown(f"[📥 Open document]({safe_str(c_.get('link'))})")
+            elif not allowed:
+                st.caption(f"🔒 Requires {safe_str(c_.get('tier'))} access or higher")
+
+def show_circulars(user):
+    page_header("Circulars & G.O.s", "Browse published circulars, G.O.s and notifications.")
+    rows = fetch_circulars()
+    a, b, c = st.columns([2, 1, 1])
+    with a:
+        search = st.text_input("Search", placeholder="Search title, reference number or category...", label_visibility="collapsed")
+    with b:
+        types = ["All"] + sorted({safe_str(r.get("doc_type")) for r in rows if r.get("doc_type")})
+        tfilter = st.selectbox("Type", types, label_visibility="collapsed")
+    with c:
+        cats = ["All"] + sorted({safe_str(r.get("category")) for r in rows if r.get("category")})
+        cfilter = st.selectbox("Category", cats, label_visibility="collapsed")
+    if search:
+        s = search.lower()
+        rows = [r for r in rows if s in safe_str(r.get("title")).lower() or s in safe_str(r.get("ref_id")).lower() or s in safe_str(r.get("category")).lower()]
+    if tfilter != "All":
+        rows = [r for r in rows if r.get("doc_type") == tfilter]
+    if cfilter != "All":
+        rows = [r for r in rows if r.get("category") == cfilter]
+    rows = sorted(rows, key=lambda r: safe_str(r.get("doc_date")), reverse=True)
+    st.caption(f"{len(rows)} document(s)")
+    if not rows:
+        st.info("No circulars match your filters.")
+        return
+    for r in rows:
+        allowed = has_access(user.get("tier", "Staff"), r.get("tier", "Basic"))
+        sup = f" · Supersedes {esc(r.get('supersedes'))}" if r.get("supersedes") else ""
+        st.markdown(
+            f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{esc(r.get("ref_id"))}</span>{tier_badge(r.get("tier","Basic"))}</div>'
+            f'<div class="doc-title">{esc(r.get("title"))}</div>'
+            f'<div class="doc-meta">🗂️ {esc(r.get("category"))} · 📅 {esc(r.get("doc_date"))}{sup}</div></div>',
+            unsafe_allow_html=True,
+        )
+        col1, col2 = st.columns([1, 5])
+        with col1:
+            if allowed and r.get("link"):
+                st.markdown(f"[📥 Open]({safe_str(r.get('link'))})")
+            elif not allowed:
+                st.warning(f"🔒 Requires {safe_str(r.get('tier'))} access or higher")
+
 def show_templates(user):
     page_header("Drafts & Templates", "Pre-approved office formats, organized by access tier.")
     rows = fetch_templates()
@@ -670,7 +705,7 @@ def show_templates(user):
     for t in rows:
         tier = t.get("tier", "Basic")
         allowed = has_access(user.get("tier", "Staff"), tier)
-        st.markdown(f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">Template</span>{tier_badge(tier)}</div><div class="doc-title">{safe_str(t.get("title"))}</div><div class="doc-meta">📝 {safe_str(t.get("description") or "No description")}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">Template</span>{tier_badge(tier)}</div><div class="doc-title">{esc(t.get("title"))}</div><div class="doc-meta">📝 {esc(t.get("description") or "No description")}</div></div>', unsafe_allow_html=True)
         if allowed and t.get("link"): st.markdown(f"[📥 Download Template]({safe_str(t.get('link'))})")
         elif not allowed: st.warning(f"🔒 Requires {tier} access or higher")
 
@@ -705,18 +740,18 @@ def show_tapal(user):
             inward = r.get("direction") == "Inward"
             cls = "tapal-inward" if inward else "tapal-outward"
             icon = "📥" if inward else "📤"
-            ref_txt = " · Ref: " + safe_str(r.get("file_ref")) if r.get("file_ref") else ""
+            ref_txt = " · Ref: " + esc(r.get("file_ref")) if r.get("file_ref") else ""
             remarks_txt = ""
             if r.get("remarks"):
-                remarks_txt = '<br><span style="font-size:10px;color:#64748B;">📝 ' + safe_str(r.get("remarks")) + "</span>"
-            html = (
+                remarks_txt = '<br><span style="font-size:10px;color:#64748B;">📝 ' + esc(r.get("remarks")) + "</span>"
+            card_html = (
                 '<div class="tapal-card ' + cls + '">'
-                '<div style="font-weight:700;font-size:13px;">' + icon + " " + safe_str(r.get("subject")) + "</div>"
+                '<div style="font-weight:700;font-size:13px;">' + icon + " " + esc(r.get("subject")) + "</div>"
                 '<div style="font-size:10px;color:#64748B;margin-top:5px;">'
-                + safe_str(r.get("from_to")) + " · " + safe_str(r.get("tapal_date")) + ref_txt
+                + esc(r.get("from_to")) + " · " + esc(r.get("tapal_date")) + ref_txt
                 + "</div>" + remarks_txt + "</div>"
             )
-            st.markdown(html, unsafe_allow_html=True)
+            st.markdown(card_html, unsafe_allow_html=True)
     with t3:
         today = date.today()
         a, b = st.columns(2)
@@ -973,8 +1008,8 @@ def show_admin(user):
             st.success("Pricing saved.")
     elif section == "🩺 Health & Diagnostics":
         st.subheader("System health")
-        n_users = len(supabase.table("users").select("id").execute().data or [])
-        n_circ = len(supabase.table("circulars").select("id").execute().data or [])
+        n_users = supabase.table("users").select("id", count="exact", head=True).execute().count or 0
+        n_circ = supabase.table("circulars").select("id", count="exact", head=True).execute().count or 0
         prov = get_setting("ai_provider", "gemini")
         key_ok = bool(get_setting(f"{prov}_api_key") or secret(f"{prov.upper()}_API_KEY"))
         a, b, c, d = st.columns(4)
@@ -991,7 +1026,7 @@ def show_admin(user):
                     st.markdown(f"**{safe_str(e.get('area'))}** · {safe_str(e.get('occurred_at'))}")
                     st.code(safe_str(e.get("message")), language=None)
             if st.button("🗑️ Clear Error Log"):
-                for e in errs: supabase.table("error_log").delete().eq("id", e["id"]).execute()
+                supabase.table("error_log").delete().in_("id", [e["id"] for e in errs]).execute()
                 st.rerun()
 
 # ---------------- ROUTER ----------------
