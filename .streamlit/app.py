@@ -217,7 +217,7 @@ def get_r2_client():
 
 def upload_to_r2(file_bytes, object_name):
     get_r2_client().put_object( Bucket=st.secrets.get("R2_BUCKET_NAME", "circulars"),, Key=object_name, Body=file_bytes, ContentType="application/pdf")
-    return f"{st.secrets['R2_PUBLIC_URL'].rstrip('/')}/{object_name}"
+            pub_url = st.secrets.get("R2_PUBLIC_URL", "")         return f"{pub_url.rstrip('/')}/{object_name}" if pub_url else object_name
 
 def extract_pdf_text(file_bytes):
     import fitz, pytesseract
