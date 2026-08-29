@@ -215,9 +215,16 @@ def get_r2_client():
     return boto3.client("s3", endpoint_url=f"https://{st.secrets['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
                         aws_access_key_id=st.secrets["R2_ACCESS_KEY_ID"], aws_secret_access_key=st.secrets["R2_SECRET_ACCESS_KEY"], region_name="auto")
 
-def upload_to_r2(file_bytes, object_name):
-    get_r2_client().put_object( Bucket=st.secrets.get("R2_BUCKET_NAME", "circulars"),, Key=object_name, Body=file_bytes, ContentType="application/pdf")
-            pub_url = st.secrets.get("R2_PUBLIC_URL", "")         return f"{pub_url.rstrip('/')}/{object_name}" if pub_url else object_name
+def upload_to_r2(file_bytes: bytes, object_name: str) -> str:
+    s3 = get_r2_client()
+    s3.put_object(
+        Bucket=st.secrets.get("R2_BUCKET_NAME", "circulars"),
+        Key=object_name,
+        Body=file_bytes,
+        ContentType="application/pdf",
+    )
+    pub_url = st.secrets.get("R2_PUBLIC_URL", "")
+    return f"{pub_url.rstrip('/')}/{object_name}" if pub_url else object_name
 
 def extract_pdf_text(file_bytes):
     import fitz, pytesseract
