@@ -374,8 +374,8 @@ def hide_cloud_chrome():
     st.markdown(
         """
         <style>
-        div.cloud-cover-top{position:fixed;top:0;right:0;width:340px;height:70px;background:#FFFFFF;z-index:999999;}
-        div.cloud-cover-bottom{position:fixed;bottom:0;right:0;width:240px;height:80px;background:#FFFFFF;z-index:999999;}
+        div.cloud-cover-top{position:fixed;top:0;right:0;width:380px;height:75px;background:#FFFFFF;z-index:2147483647 !important;pointer-events:auto;}
+        div.cloud-cover-bottom{position:fixed;bottom:0;right:0;width:280px;height:95px;background:#FFFFFF;z-index:2147483647 !important;pointer-events:auto;}
         </style>
         <div class="cloud-cover-top"></div>
         <div class="cloud-cover-bottom"></div>
