@@ -197,7 +197,7 @@ def do_login(u, remember=True):
     st.session_state.logged_in = True
     st.session_state.user = u
     if remember:
-        cookies.set(COOKIE_NAME, create_session_token(u["email"]), max_age=SESSION_DAYS * 24 * 3600)
+        st.session_state["session_token"] = create_session_token(u["email"])
     st.rerun()
 
 def otp_send(identifier, channel):
