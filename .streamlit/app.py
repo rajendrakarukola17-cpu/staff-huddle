@@ -85,6 +85,7 @@ hr{border-color:var(--border) !important;}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+st.markdown("<style>header [data-testid='stSidebarCollapsedControl'], header [data-testid='collapsedControl'] { visibility: visible !important; }</style>", unsafe_allow_html=True)
 
 DAILY_AI_LIMIT = 20
 MAX_UPLOAD_MB = 20
