@@ -276,6 +276,14 @@ def set_setting(key, value):
         supabase.table("app_settings").insert({"key": key, "value": value}).execute()
     _fetch_all_settings.clear()  # invalidate cache so the new value is picked up immediately
 
+DEFAULT_DEPARTMENTS = "Establishment;Accounts;Enforcement;Licensing;Registration;Correspondence / Tapal"
+DEFAULT_OFFICES = "DTC Office, Visakhapatnam;RTA Office, Visakhapatnam"
+
+def get_org_list(setting_key, default_csv):
+    raw = get_setting(setting_key, default_csv)
+    items = [x.strip() for x in raw.split(";") if x.strip()]
+    return items or [x.strip() for x in default_csv.split(";")]
+
 def log_error(area, message):
     try: supabase.table("error_log").insert({"area": area, "message": str(message)[:2000], "occurred_at": datetime.utcnow().isoformat()}).execute()
     except Exception: pass
@@ -463,7 +471,7 @@ def show_login():
     <div class="login-shell"><div class="login-panel">
       <div class="login-brand"><div class="login-mark">🏛️</div><h1>GovDocs AI</h1>
         <p>AI-powered government document workspace for circulars, G.O.s, Tapal, templates and internal rules assistance.</p>
-        <div style="margin-top:25px;font-size:11px;color:rgba(255,255,255,.72);line-height:1.8;"><b style="color:#fff;">Instant staff accounts</b><br>Verify your email or phone with OTP · Basic is free forever · Pro/Max by admin approval</div>
+        <div style="margin-top:25px;font-size:11px;color:rgba(255,255,255,.72);line-height:1.8;"><b style="color:#fff;">Instant staff accounts</b><br>Verify your email with OTP · Basic is free forever · Pro/Max by admin approval</div>
       </div>
       <div class="login-form"><h2>Welcome</h2><div class="muted">Sign in, or create your account in 60 seconds.</div></div>
     </div></div>""", unsafe_allow_html=True)
@@ -483,19 +491,26 @@ def show_login():
                 else:
                     st.error("Invalid email or password.")
         with tab_signup:
-            st.caption("Verify email or phone, set a password — instant **Basic** account.")
-            ch = st.radio("OTP channel", ["Email OTP", "Phone OTP"], horizontal=True)
+            st.caption("Verify your email, set a password — instant **Basic** account.")
             n = st.text_input("Full Name *")
-            off = st.text_input("Office Name *")
+            dept_opts = get_org_list("departments", DEFAULT_DEPARTMENTS) + ["Other (type below)"]
+            dept_choice = st.selectbox("Department / Section *", dept_opts)
+            dept = st.text_input("Enter department") if dept_choice.startswith("Other") else dept_choice
+            off_opts = get_org_list("offices", DEFAULT_OFFICES) + ["Other (type below)"]
+            off_choice = st.selectbox("Office *", off_opts)
+            off = st.text_input("Enter office name") if off_choice.startswith("Other") else off_choice
             dsg = st.text_input("Designation *")
-            ph = st.text_input("Phone Number *")
+            emp_id = st.text_input("Employee ID (optional)")
+            ph = st.text_input("Phone Number (optional)")
             em = st.text_input("Email *")
-            channel = "email" if ch == "Email OTP" else "phone"
-            ident = em.strip().lower() if channel == "email" else ph.strip()
+            channel = "email"
+            ident = em.strip().lower()
             if st.button("Send OTP →", use_container_width=True):
-                if not (n.strip() and off.strip() and dsg.strip() and email_ok(em) and phone_ok(ph)):
-                    st.warning("Fill all fields correctly.")
-                elif channel == "email" and get_user(em.strip().lower()):
+                if not (n.strip() and off.strip() and dept.strip() and dsg.strip() and email_ok(em)):
+                    st.warning("Fill all required fields correctly.")
+                elif ph.strip() and not phone_ok(ph):
+                    st.warning("Phone number looks invalid — leave it blank or fix it.")
+                elif get_user(em.strip().lower()):
                     st.warning("This email already has an account — use Sign In.")
                 else:
                     ok, err = otp_send(ident, channel)
@@ -508,7 +523,10 @@ def show_login():
                 ok, err = otp_verify(ident, channel, code)
                 st.session_state["otp_ok"] = ok
                 st.session_state["otp_ident"] = ident
-                st.success("Verified ✓ Now set your password below.") if ok else st.error(err)
+                if ok:
+                    st.success("Verified ✓ Now set your password below.")
+                else:
+                    st.error(err)
             pw = st.text_input("Create Password *", type="password")
             pw2 = st.text_input("Confirm Password *", type="password")
             if st.button("Create Account →", use_container_width=True, type="primary"):
@@ -518,13 +536,15 @@ def show_login():
                     st.warning("Password must be 8+ characters and match.")
                 else:
                     payload = {"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True,
-                               "office_name": off.strip(), "designation": dsg.strip(), "phone": ph.strip(),
+                               "office_name": off.strip(), "department": dept.strip(), "designation": dsg.strip(),
+                               "employee_id": emp_id.strip() or None, "phone": ph.strip(),
                                "email_verified": channel == "email", "phone_verified": channel == "phone"}
                     try:
                         supabase.table("users").insert(payload).execute()
                     except Exception:
-                        supabase.table("users").insert({"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True}).execute()
+                        supabase.table("users").insert({"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True, "office_name": off.strip(), "designation": dsg.strip()}).execute()
                     st.session_state["otp_ok"] = False
+                    st.session_state["show_welcome"] = True
                     do_login(get_user(em.strip().lower()))
         with tab_request:
             st.info("For Pro/Max or special roles. An administrator reviews every request.")
@@ -895,7 +915,7 @@ def show_admin(user):
     if user.get("tier") != "Admin":
         st.error("Admin access required."); return
     page_header("Admin Command Center", "Manage users, publish documents, configure AI and monitor health.")
-    section = st.radio("Admin section", ["👥 Users", "📢 Document Publisher", "🔧 AI & Gateway Settings", "🩺 Health & Diagnostics"], horizontal=True, label_visibility="collapsed")
+    section = st.radio("Admin section", ["👥 Users", "🏢 Org Settings", "📢 Document Publisher", "🔧 AI & Gateway Settings", "🩺 Health & Diagnostics"], horizontal=True, label_visibility="collapsed")
     if section == "👥 Users":
         st.subheader("Pending access requests")
         res = supabase.table("pending_requests").select("*").eq("status", "pending").execute()
@@ -967,6 +987,28 @@ def show_admin(user):
                         supabase.table("users").update({"active": not active}).eq("id", u["id"]).execute()
                         if active: supabase.table("sessions").delete().eq("email", u["email"]).execute()
                         st.rerun()
+                e, f = st.columns([1.1, 1])
+                tiers = ["Staff", "Basic", "Pro", "Max", "Admin"]
+                cur_tier = u.get("tier", "Staff")
+                with e:
+                    new_tier = st.selectbox("Change plan", tiers, index=tiers.index(cur_tier) if cur_tier in tiers else 0, key=f"plan_{u['id']}", label_visibility="collapsed")
+                with f:
+                    if st.button("Change Plan", key=f"chg_{u['id']}", disabled=(new_tier == cur_tier)):
+                        supabase.table("users").update({"tier": new_tier}).eq("id", u["id"]).execute()
+                        st.success(f"{safe_str(u.get('name'))} moved to {new_tier}."); st.rerun()
+    elif section == "🏢 Org Settings":
+        st.subheader("Departments")
+        st.caption("Shown as dropdown choices on the signup form — one per line.")
+        cur_depts = "\n".join(get_org_list("departments", DEFAULT_DEPARTMENTS))
+        depts_in = st.text_area("Departments", value=cur_depts, height=110, label_visibility="collapsed")
+        st.subheader("Offices")
+        st.caption("One per line (commas are fine within a name, e.g. 'DTC Office, Visakhapatnam').")
+        cur_offs = "\n".join(get_org_list("offices", DEFAULT_OFFICES))
+        offs_in = st.text_area("Offices", value=cur_offs, height=110, label_visibility="collapsed")
+        if st.button("Save Org Settings", type="primary"):
+            set_setting("departments", ";".join(x.strip() for x in depts_in.splitlines() if x.strip()))
+            set_setting("offices", ";".join(x.strip() for x in offs_in.splitlines() if x.strip()))
+            st.success("Saved. New signups will see the updated lists.")
     elif section == "📢 Document Publisher":
         st.subheader("Publish new circular / G.O.")
         source = st.radio("Document source", ["Upload PDF", "Paste a link"], horizontal=True)
@@ -1057,6 +1099,27 @@ def show_admin(user):
                 supabase.table("error_log").delete().in_("id", [e["id"] for e in errs]).execute()
                 st.rerun()
 
+def show_welcome(user):
+    hide_cloud_chrome()
+    st.markdown('<div class="login-shell">', unsafe_allow_html=True)
+    _, c2, _ = st.columns([1, 1.2, 1])
+    with c2:
+        with st.container(border=True):
+            st.markdown("### Welcome to Staff Huddle 👋")
+            st.caption("Your account is ready.")
+            st.markdown(
+                f"| | |\n|---|---|\n"
+                f"| Account | 🟢 Active |\n"
+                f"| Plan | 🟢 {esc(user.get('tier','Basic'))} — Free |\n"
+                f"| Email | 🟢 Verified |\n"
+                f"| Office | {esc(user.get('office_name') or '—')} |\n"
+                f"| Department | {esc(user.get('department') or '—')} |\n"
+            )
+            if st.button("Enter Staff Workspace →", type="primary", use_container_width=True):
+                st.session_state["show_welcome"] = False
+                st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # ---------------- ROUTER ----------------
 try_auto_login()
 if not st.session_state.logged_in:
@@ -1068,6 +1131,9 @@ else:
         show_full_chrome()
     else:
         hide_cloud_chrome()
+    if st.session_state.get("show_welcome"):
+        show_welcome(user)
+        st.stop()
     menu = render_sidebar(user)
     topbar(user)
     if menu == "🏠 Dashboard": show_home(user)
