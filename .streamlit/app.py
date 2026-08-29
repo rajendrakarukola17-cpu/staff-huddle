@@ -1,3 +1,4 @@
+import streamlit.components.v1 as components
 import gzip
 import html
 import io
