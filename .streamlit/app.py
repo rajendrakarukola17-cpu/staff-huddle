@@ -85,6 +85,7 @@ hr{border-color:var(--border) !important;}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+st.markdown("<style>header{visibility:visible !important}#MainMenu{visibility:hidden !important}footer{visibility:hidden !important}header [data-testid='stSidebarCollapsedControl'],header [data-testid='collapsedControl'],[data-testid='stSidebarCollapsedControl'],[data-testid='collapsedControl']{visibility:visible !important}</style>", unsafe_allow_html=True)
 st.markdown("<style>header [data-testid='stSidebarCollapsedControl'], header [data-testid='collapsedControl'] { visibility: visible !important; }</style>", unsafe_allow_html=True)
 
 DAILY_AI_LIMIT = 20
