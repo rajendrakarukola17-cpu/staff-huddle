@@ -187,11 +187,14 @@ def clear_session_token(token):
     except Exception: pass
 
 def try_auto_login():
-    if st.session_state.logged_in: return
-    user = get_user_from_token(read_session_cookie())
+    if st.session_state.logged_in:
+        return
+    token = read_session_cookie()
+    user = get_user_from_token(token)
     if user:
         st.session_state.logged_in = True
         st.session_state.user = user
+        st.session_state["session_token"] = token
 
 def do_login(u, remember=True):
     st.session_state.logged_in = True
