@@ -509,9 +509,22 @@ def show_tapal(user):
         if search: rows = [r for r in rows if search.lower() in str(r).lower()]
         if dfilter != "All": rows = [r for r in rows if r.get("direction") == dfilter]
         st.caption(f"{len(rows)} record(s)")
-        for r in rows:
+       for r in rows:
             inward = r.get("direction") == "Inward"
-            st.markdown(f'<div class="tapal-card {"tapal-inward" if inward else "tapal-outward"}"><div style="font-weight:700;font-size:13px;">{"📥" if inward else "📤"} {safe_str(r.get("subject"))}</div><div style="font-size:10px;color:#64748B;margin-top:5px;">{safe_str(r.get("from_to"))} · {safe_str(r.get("tapal_date"))}{f" · Ref: {safe_str(r.get('file_ref'))}" if r.get("file_ref") else ""}</div>{f"<div style=\'font-size:10px;color:#64748B;\'>📝 {safe_str(r.get(\'remarks\'))}</div>" if r.get("remarks") else ""}</div>', unsafe_allow_html=True)
+            cls = "tapal-inward" if inward else "tapal-outward"
+            icon = "📥" if inward else "📤"
+            ref_txt = " · Ref: " + safe_str(r.get("file_ref")) if r.get("file_ref") else ""
+            remarks_txt = ""
+            if r.get("remarks"):
+                remarks_txt = '<br><span style="font-size:10px;color:#64748B;">📝 ' + safe_str(r.get("remarks")) + "</span>"
+            html = (
+                '<div class="tapal-card ' + cls + '">'
+                '<div style="font-weight:700;font-size:13px;">' + icon + " " + safe_str(r.get("subject")) + "</div>"
+                '<div style="font-size:10px;color:#64748B;margin-top:5px;">'
+                + safe_str(r.get("from_to")) + " · " + safe_str(r.get("tapal_date")) + ref_txt
+                + "</div>" + remarks_txt + "</div>"
+            )
+            st.markdown(html, unsafe_allow_html=True)
     with t3:
         today = date.today()
         a, b = st.columns(2)
