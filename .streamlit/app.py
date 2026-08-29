@@ -1,298 +1,289 @@
-import io, os, re, secrets, smtplib
+import gzip
+import io
+import os
+import re
+import secrets
+import smtplib
 from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
-import bcrypt, pandas as pd, streamlit as st
-from supabase import create_client
+import bcrypt
+import pandas as pd
+import streamlit as st
+from supabase import create_client, Client
 from streamlit_cookies_controller import CookieController
 
-st.set_page_config(page_title='RTA Vizag Staff Huddle', page_icon='🧭', layout='wide')
+st.set_page_config(page_title="GovDocs AI — Government Workspace", page_icon="🏛️", layout="wide", initial_sidebar_state="expanded")
 
-CSS='''<style>
+CUSTOM_CSS = r"""
+<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-:root{--navy:#1E3A5F;--navy2:#2C5282;--indigo:#4F46A5;--bg:#F7F9FB;--line:#E2E8F0;--text:#172033;--muted:#64748B}
-html,body,[class*="css"]{font-family:Inter,sans-serif}.stApp{background:radial-gradient(900px 500px at 100% -10%,#dfeaf7,transparent 60%),var(--bg)}
-#MainMenu,header,footer{visibility:hidden}h1,h2,h3{color:var(--text);letter-spacing:-.025em}
-.stButton>button{border-radius:11px!important;border:1px solid var(--line)!important;background:#fff!important;color:var(--navy)!important;font-weight:600!important}
-.stButton>button[kind="primary"]{background:linear-gradient(135deg,var(--navy2),var(--navy))!important;color:#fff!important;border:0!important}
-.stTextInput input,.stTextArea textarea,.stSelectbox [data-baseweb="select"],.stNumberInput input,.stDateInput input{border-radius:11px!important;border-color:var(--line)!important;background:#fff!important}
-section[data-testid="stSidebar"]{background:#fff!important;border-right:1px solid var(--line)}
-section[data-testid="stSidebar"] .stRadio>div>label{padding:.55rem .75rem;border-radius:10px;margin-bottom:3px}
-section[data-testid="stSidebar"] .stRadio>div>label:has(div[aria-checked="true"]){background:#EAF0F7;color:var(--navy);font-weight:700}
-.header{background:linear-gradient(135deg,var(--navy),var(--navy2));color:#fff;padding:1.6rem 1.8rem;border-radius:18px;margin-bottom:1.2rem;box-shadow:0 18px 50px #0f172a18}.header h1{color:#fff;margin:0}.header p{color:#dbe7f4;margin:.35rem 0 0}
-.card,.plan{background:#fff;border:1px solid var(--line);border-radius:18px;padding:1.1rem 1.2rem;box-shadow:0 8px 30px #0f172a0d;margin-bottom:.75rem}.title{font-weight:700;color:var(--text)}.sub{color:var(--muted);font-size:.82rem;margin-top:.3rem}
-.kpi{background:#fff;border:1px solid var(--line);border-radius:16px;padding:1rem;box-shadow:0 8px 25px #0f172a0b}.kpi label{display:block;color:var(--muted);font-size:.7rem;font-weight:700;text-transform:uppercase}.kpi b{font-size:1.7rem;color:var(--text)}
-.badge{display:inline-block;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:700;background:#eef2f7;color:#475569}.basic{background:#ecfdf3;color:#087443}.pro{background:#eaf2ff;color:#1d5aa6}.max{background:#f0edff;color:#5143a4}.admin{background:#efe7ff;color:#5b21b6}
-.chat-user{background:#eaf0f7;border:1px solid #d9e3ef;border-radius:16px 16px 4px 16px;padding:.85rem 1rem;margin:.4rem 0 .4rem 16%}.chat-ai{background:#fff;border:1px solid var(--line);border-radius:16px 16px 16px 4px;padding:.9rem 1rem;margin:.4rem 16% .4rem 0;box-shadow:0 8px 25px #0f172a0b}
-.login{max-width:980px;margin:5vh auto;background:#fff;border:1px solid var(--line);border-radius:24px;overflow:hidden;box-shadow:0 25px 70px #0f172a20}.brand{background:linear-gradient(145deg,#142a46,var(--navy2));color:#fff;padding:2.5rem;min-height:450px}.brand h1{color:#fff;font-size:2rem}.brand p{color:#dbe7f4}.panel{padding:2rem}
-</style>'''
-st.markdown(CSS,unsafe_allow_html=True)
+:root{--navy-900:#16324F;--navy-800:#1E3A5F;--navy-700:#2C5282;--canvas:#F7F9FB;--border:#E2E8F0;--border-strong:#CBD5E1;--text:#0F172A;--muted:#64748B;--shadow:0 2px 10px rgba(15,23,42,.05);--shadow-md:0 8px 24px rgba(15,23,42,.08);--shadow-lg:0 18px 45px rgba(15,23,42,.12);}
+html,body,[class*="css"]{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+body{background:var(--canvas);} .stApp{background:var(--canvas);color:var(--text);}
+#MainMenu,footer{visibility:hidden;}
+.block-container{padding-top:1.35rem;padding-bottom:3rem;max-width:1500px;}
+h1,h2,h3,h4{color:var(--text);font-weight:700;letter-spacing:-.025em;}
+section[data-testid="stSidebar"]{background:#FFF !important;border-right:1px solid var(--border) !important;}
+section[data-testid="stSidebar"] .stRadio>div{gap:4px;}
+section[data-testid="stSidebar"] .stRadio>div>label{border-radius:10px;padding:.62rem .75rem;margin:0;color:#334155;font-weight:500;}
+section[data-testid="stSidebar"] .stRadio>div>label:has(div[aria-checked="true"]){background:#EAF2FF;color:var(--navy-800);font-weight:700;}
+section[data-testid="stSidebar"] .stRadio>div>label p{color:inherit !important;}
+.sidebar-brand{display:flex;align-items:center;gap:10px;padding:.45rem .35rem 1.1rem;border-bottom:1px solid var(--border);margin-bottom:1rem;}
+.sidebar-logo{width:38px;height:38px;border-radius:10px;background:var(--navy-800);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;}
+.sidebar-brand-title{font-size:17px;font-weight:800;color:var(--navy-900);} .sidebar-brand-sub{font-size:10px;color:var(--muted);}
+.profile-card{background:#F8FAFC;border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:12px;}
+.profile-name{font-size:13px;font-weight:700;} .profile-email{font-size:10px;color:var(--muted);margin-top:3px;}
+.profile-role{margin-top:9px;display:flex;align-items:center;justify-content:space-between;}
+.app-topbar{display:flex;align-items:center;justify-content:space-between;background:#FFF;border:1px solid var(--border);border-radius:14px;padding:13px 18px;margin-bottom:18px;box-shadow:var(--shadow);}
+.app-topbar-title{font-size:13px;font-weight:700;color:var(--navy-800);} .app-topbar-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+.page-header{margin-bottom:20px;} .page-header h1{margin:0;font-size:27px;} .page-header p{margin:5px 0 0;color:var(--muted);font-size:13px;}
+.kpi-card{background:#FFF;border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow);min-height:112px;}
+.kpi-label{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
+.kpi-value{color:var(--text);font-size:25px;font-weight:800;margin-top:8px;}
+.kpi-foot{color:var(--muted);font-size:10px;margin-top:3px;}
+.stButton>button{border:1px solid var(--border-strong) !important;background:#FFF !important;color:var(--navy-800) !important;border-radius:9px !important;font-weight:600 !important;min-height:38px;}
+.stButton>button[kind="primary"]{background:var(--navy-800) !important;color:#FFF !important;border-color:var(--navy-800) !important;}
+.stTextInput>div>div>input,.stTextArea>div>div>textarea,.stSelectbox>div>div,.stDateInput>div>div>input,.stNumberInput>div>div>input{background:#FFF !important;border:1px solid var(--border-strong) !important;border-radius:9px !important;}
+.stTabs [data-baseweb="tab-list"]{gap:2px;background:#EEF2F6;padding:3px;border-radius:10px;border:none;}
+.stTabs [data-baseweb="tab"]{border-radius:8px;color:#475569;font-weight:600;font-size:12px;}
+.stTabs [aria-selected="true"]{background:#FFF !important;color:var(--navy-800) !important;}
+.doc-card{background:#FFF;border:1px solid var(--border);border-radius:14px;padding:15px 16px;margin:0 0 9px;box-shadow:var(--shadow);}
+.doc-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;}
+.doc-ref{color:var(--navy-700);background:#EFF6FF;border:1px solid #DBEAFE;border-radius:999px;padding:4px 9px;font-size:10px;font-weight:700;}
+.doc-title{font-size:14px;font-weight:700;margin-top:9px;}
+.doc-meta{display:flex;flex-wrap:wrap;gap:10px;color:var(--muted);font-size:10px;margin-top:6px;}
+.badge{display:inline-flex;padding:4px 9px;border-radius:999px;font-size:10px;font-weight:700;}
+.badge-basic{background:#F1F5F9;color:#475569;border:1px solid #E2E8F0;}
+.badge-pro{background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;}
+.badge-max{background:#F5F3FF;color:#6D28D9;border:1px solid #DDD6FE;}
+.plan-card{background:#FFF;border:1px solid var(--border);border-radius:16px;padding:21px;min-height:380px;position:relative;box-shadow:var(--shadow);}
+.plan-card.featured{border:2px solid var(--navy-700);}
+.plan-pill{position:absolute;right:18px;top:-12px;background:var(--navy-800);color:#fff;border-radius:999px;padding:5px 10px;font-size:9px;font-weight:800;}
+.plan-name{font-size:17px;font-weight:800;} .plan-price{font-size:30px;font-weight:800;margin-top:13px;}
+.plan-period{color:var(--muted);font-size:11px;} .plan-description{color:var(--muted);font-size:11px;min-height:34px;margin-top:5px;}
+.feature{font-size:11px;color:#475569;margin:10px 0;}
+.tapal-card{background:#FFF;border:1px solid var(--border);border-radius:13px;padding:14px;margin-bottom:9px;box-shadow:var(--shadow);}
+.tapal-inward{border-left:4px solid var(--navy-700);} .tapal-outward{border-left:4px solid #16A34A;}
+.login-shell{min-height:78vh;display:flex;align-items:center;justify-content:center;padding:30px 10px;}
+.login-panel{width:min(920px,100%);background:#FFF;border:1px solid var(--border);border-radius:20px;box-shadow:var(--shadow-lg);overflow:hidden;display:grid;grid-template-columns:1fr 1.05fr;}
+.login-brand{background:linear-gradient(150deg,#16324F,#2C5282);padding:48px;color:#FFF;display:flex;flex-direction:column;justify-content:center;min-height:510px;}
+.login-brand h1{color:#FFF;font-size:32px;margin:12px 0 8px;} .login-brand p{color:rgba(255,255,255,.78);font-size:12px;line-height:1.7;}
+.login-mark{width:52px;height:52px;border-radius:14px;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-size:27px;border:1px solid rgba(255,255,255,.18);}
+.login-form{padding:38px 40px;} .login-form h2{font-size:22px;margin:0 0 5px;} .login-form .muted{color:var(--muted);font-size:12px;margin-bottom:18px;}
+hr{border-color:var(--border) !important;}
+@media(max-width:900px){.login-panel{grid-template-columns:1fr;}.login-brand{min-height:auto;padding:28px;}.login-form{padding:28px 22px;}}
+@media(max-width:700px){.block-container{padding:12px 10px 30px;}.page-header h1{font-size:22px;}.doc-row{flex-direction:column;}.plan-card{min-height:auto;}.app-topbar{flex-direction:column;align-items:flex-start;gap:8px;}.kpi-card{min-height:auto;}}
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+st.markdown("<style>header{visibility:visible !important}#MainMenu{visibility:hidden !important}footer{visibility:hidden !important}[data-testid='stSidebarCollapsedControl'],[data-testid='collapsedControl']{visibility:visible !important}</style>", unsafe_allow_html=True)
 
-TIERS={'Basic':1,'Staff':1,'Pro':2,'Max':3,'Admin':4}; DAILY_AI_LIMIT=20; SESSION_DAYS=30; OTP_MIN=10
-PROVIDERS={
- 'gemini':('Google Gemini','gemini','gemini-2.5-flash',''),
- 'qwen':('Alibaba Qwen / DashScope','openai','qwen-plus','https://dashscope-intl.aliyuncs.com/compatible-mode/v1'),
- 'groq':('Groq','openai','llama-3.3-70b-versatile','https://api.groq.com/openai/v1'),
- 'openai':('OpenAI','openai','gpt-5-mini','https://api.openai.com/v1'),
- 'mistral':('Mistral','openai','mistral-small-latest','https://api.mistral.ai/v1'),
- 'custom':('Custom OpenAI-compatible','openai','','')}
+DAILY_AI_LIMIT = 20
+MAX_UPLOAD_MB = 20
+OCR_MAX_PAGES = 40
+SESSION_DAYS = 30
+COOKIE_NAME = "huddle_session"
+OTP_MIN = 10
 
-def secret(k,d=''):
- try:return st.secrets.get(k,d) or os.getenv(k,d)
- except:return os.getenv(k,d)
-def now():return datetime.now(timezone.utc)
-def iso():return now().isoformat()
-def email_ok(x):return bool(re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$',x or ''))
-def phone_ok(x):return 10<=len(re.sub(r'\D','',x or ''))<=15
-def badge(t):return f'<span class="badge {t.lower()}">{t}</span>'
-def access(a,r):return TIERS.get(a,0)>=TIERS.get(r,0)
-def log_error(area,msg):
- try:supabase.table('error_log').insert({'area':area,'message':str(msg)[:4000],'occurred_at':iso()}).execute()
- except:pass
+PROVIDERS = {
+    "gemini": ("Google Gemini", "gemini", "gemini-2.0-flash", ""),
+    "groq": ("Groq", "openai", "llama-3.3-70b-versatile", "https://api.groq.com/openai/v1"),
+    "qwen": ("Alibaba Qwen", "openai", "qwen-plus", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    "openai": ("OpenAI", "openai", "gpt-4o-mini", "https://api.openai.com/v1"),
+    "mistral": ("Mistral", "openai", "mistral-small-latest", "https://api.mistral.ai/v1"),
+    "custom": ("Custom endpoint", "openai", "", ""),
+}
+
+def page_header(title, subtitle=""):
+    st.markdown(f'<div class="page-header"><h1>{title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
+
+def greeting():
+    h = datetime.now().hour
+    return "Good morning" if h < 12 else ("Good afternoon" if h < 17 else "Good evening")
+
+def tier_badge(tier):
+    cls = {"Basic": "badge-basic", "Staff": "badge-basic", "Pro": "badge-pro", "Max": "badge-max", "Admin": "badge-max"}.get(tier, "badge-basic")
+    return f'<span class="badge {cls}">{tier}</span>'
+
+def safe_str(v):
+    return "" if v is None else str(v)
+
+def email_ok(x):
+    return bool(re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', x or ''))
+
+def phone_ok(x):
+    return 10 <= len(re.sub(r'\D', '', x or '')) <= 15
+
+def secret(k, d=""):
+    try: return st.secrets.get(k, d) or os.getenv(k, d)
+    except Exception: return os.getenv(k, d)
+
+def now_utc():
+    return datetime.now(timezone.utc)
 
 @st.cache_resource
-def db():
- u=secret('SUPABASE_URL'); k=secret('SUPABASE_SERVICE_ROLE_KEY') or secret('SUPABASE_KEY')
- if not u or not k: st.error('Missing Supabase secrets.'); st.stop()
- return create_client(u,k)
-supabase=db(); cookies=CookieController()
+def get_supabase() -> Client:
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-def setting(k,d=''):
- try:
-  r=supabase.table('app_settings').select('value').eq('key',k).limit(1).execute(); return r.data[0]['value'] if r.data else d
- except:return d
-def set_setting(k,v):
- try:
-  r=supabase.table('app_settings').select('key').eq('key',k).limit(1).execute()
-  if r.data:supabase.table('app_settings').update({'value':str(v),'updated_at':iso()}).eq('key',k).execute()
-  else:supabase.table('app_settings').insert({'key':k,'value':str(v)}).execute()
-  return True
- except Exception as e:log_error('setting',e);return False
+supabase = get_supabase()
+cookies = CookieController()
 
-def user(email):
- try:r=supabase.table('users').select('*').eq('email',email.strip().lower()).limit(1).execute();return r.data[0] if r.data else None
- except Exception as e:log_error('user',e);return None
-def hp(p):return bcrypt.hashpw(p.encode(),bcrypt.gensalt()).decode()
-def cp(p,h):
- try:return bcrypt.checkpw(p.encode(),h.encode())
- except:return False
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user = None
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-def otp_send(identifier,channel):
- code=f'{secrets.randbelow(1000000):06d}'; h=hp(code)
- supabase.table('otp_verifications').insert({'identifier':identifier,'channel':channel,'purpose':'signup','code_hash':h,'expires_at':(now()+timedelta(minutes=OTP_MIN)).isoformat()}).execute()
- if channel=='email':
-  host=secret('SMTP_HOST');port=int(secret('SMTP_PORT','587'));usr=secret('SMTP_USERNAME');pw=secret('SMTP_PASSWORD');sender=secret('SMTP_FROM') or usr
-  if not all([host,usr,pw,sender]):return False,'SMTP email OTP is not configured.'
-  try:
-   m=EmailMessage();m['Subject']='Staff Huddle verification code';m['From']=sender;m['To']=identifier;m.set_content(f'Your Staff Huddle OTP is {code}. It expires in {OTP_MIN} minutes.')
-   with smtplib.SMTP(host,port,timeout=20) as s:s.starttls();s.login(usr,pw);s.send_message(m)
-   return True,''
-  except Exception as e:log_error('smtp_otp',e);return False,str(e)
- sid=secret('TWILIO_ACCOUNT_SID');tok=secret('TWILIO_AUTH_TOKEN');frm=secret('TWILIO_FROM_NUMBER')
- if not all([sid,tok,frm]):return False,'SMS OTP is not configured. Use Email OTP or add Twilio secrets.'
- try:
-  from twilio.rest import Client
-  Client(sid,tok).messages.create(body=f'Staff Huddle OTP: {code}. Valid {OTP_MIN} minutes.',from_=frm,to=identifier);return True,''
- except Exception as e:log_error('sms_otp',e);return False,str(e)
+# ---------------- AUTH ----------------
+def hash_password(p): return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
+def check_password(p, h):
+    try: return bcrypt.checkpw(p.encode(), h.encode())
+    except Exception: return False
 
-def otp_verify(identifier,channel,code):
- try:
-  r=supabase.table('otp_verifications').select('*').eq('identifier',identifier).eq('channel',channel).eq('purpose','signup').eq('verified',False).order('created_at',desc=True).limit(1).execute()
-  if not r.data:return False,'Request a new OTP.'
-  x=r.data[0]
-  if datetime.fromisoformat(x['expires_at'].replace('Z','+00:00'))<now():return False,'OTP expired.'
-  if int(x.get('attempts',0))>=5:return False,'Too many attempts. Request a new OTP.'
-  supabase.table('otp_verifications').update({'attempts':int(x.get('attempts',0))+1}).eq('id',x['id']).execute()
-  if not cp(code.strip(),x['code_hash']):return False,'Incorrect OTP.'
-  supabase.table('otp_verifications').update({'verified':True}).eq('id',x['id']).execute();return True,''
- except Exception as e:log_error('otp_verify',e);return False,'OTP verification failed.'
+def get_user(email):
+    res = supabase.table("users").select("*").eq("email", email).execute()
+    return res.data[0] if res.data else None
 
-def session(email):
- t=secrets.token_urlsafe(48);exp=now()+timedelta(days=SESSION_DAYS);supabase.table('sessions').insert({'token':t,'email':email,'expires_at':exp.isoformat()}).execute();return t
-def session_user(t):
- if not t:return None
- try:
-  r=supabase.table('sessions').select('*').eq('token',t).limit(1).execute()
-  if not r.data:return None
-  x=r.data[0]
-  if datetime.fromisoformat(x['expires_at'].replace('Z','+00:00'))<now():return None
-  u=user(x['email']);return u if u and u.get('active',True) else None
- except:return None
+def create_pending_request(name, email, note):
+    supabase.table("pending_requests").insert({"name": name, "email": email, "note": note, "requested_at": datetime.utcnow().isoformat(), "status": "pending"}).execute()
 
-def sign_in(u):
- t=session(u['email']);cookies.set('huddle_session',t,max_age=SESSION_DAYS*86400);st.session_state.logged=True;st.session_state.user=u;st.rerun()
+def has_access(user_tier, required_tier):
+    levels = {"Staff": 1, "Basic": 1, "Pro": 2, "Max": 3, "Admin": 4}
+    return levels.get(user_tier, 0) >= levels.get(required_tier, 0)
 
-@st.cache_data(ttl=30)
-def rows(table,order=None):
- try:
-  q=supabase.table(table).select('*')
-  if order:q=q.order(order,desc=True)
-  return q.execute().data or []
- except Exception as e:log_error('fetch_'+table,e);return []
-def ai_usage(email):
- try:r=supabase.table('ai_usage').select('count').eq('email',email).eq('day',date.today().isoformat()).limit(1).execute();return int(r.data[0]['count']) if r.data else 0
- except:return 0
-def ai_inc(email):
- d=date.today().isoformat();r=supabase.table('ai_usage').select('*').eq('email',email).eq('day',d).limit(1).execute()
- if r.data:supabase.table('ai_usage').update({'count':int(r.data[0]['count'])+1}).eq('id',r.data[0]['id']).execute()
- else:supabase.table('ai_usage').insert({'email':email,'day':d,'count':1}).execute()
+def create_session_token(email):
+    token = secrets.token_urlsafe(32)
+    supabase.table("sessions").insert({"token": token, "email": email, "expires_at": (datetime.utcnow() + timedelta(days=SESSION_DAYS)).isoformat()}).execute()
+    return token
 
-def ai_call(prompt,context):
- p=setting('ai_provider','gemini');name,kind,model,endpoint=PROVIDERS.get(p,PROVIDERS['gemini']);key=setting(p+'_api_key') or secret(p.upper()+'_API_KEY')
- if not key:return None,f'{name} API key is not configured.'
- try:
-  if kind=='gemini':
-   from google import genai
-   from google.genai import types
-   c=genai.Client(api_key=key);r=c.models.generate_content(model=model,contents=prompt,config=types.GenerateContentConfig(system_instruction=context,temperature=.15));return r.text,None
-  from openai import OpenAI
-  c=OpenAI(api_key=key,base_url=endpoint.rstrip('/'));r=c.chat.completions.create(model=model,messages=[{'role':'system','content':context},{'role':'user','content':prompt}],temperature=.15);return r.choices[0].message.content,None
- except Exception as e:log_error('ai_'+p,repr(e));return None,f'{name} error: {e}'
+def get_user_from_token(token):
+    if not token: return None
+    res = supabase.table("sessions").select("*").eq("token", token).execute()
+    if not res.data: return None
+    s = res.data[0]
+    if s["expires_at"] < datetime.utcnow().isoformat():
+        supabase.table("sessions").delete().eq("token", token).execute(); return None
+    user = get_user(s["email"])
+    if user and user.get("active", True) is False:
+        supabase.table("sessions").delete().eq("token", token).execute(); return None
+    return user
 
-def circular_search(q,limit=5):
- try:return supabase.rpc('search_circular_chunks',{'q':q,'limit_count':limit}).execute().data or []
- except Exception as e:log_error('ai_search',e);return []
+def read_session_cookie():
+    try: return st.context.cookies.get(COOKIE_NAME)
+    except Exception:
+        try: return cookies.get(COOKIE_NAME)
+        except Exception: return None
 
-def header(t,s=''):st.markdown(f'<div class="header"><h1>{t}</h1><p>{s}</p></div>',unsafe_allow_html=True)
+def clear_session_token(token):
+    if token: supabase.table("sessions").delete().eq("token", token).execute()
+    try: cookies.remove(COOKIE_NAME)
+    except Exception: pass
 
-def login():
- st.markdown('<div class="login"><div class="brand">🧭<h1>RTA Vizag<br>Staff Huddle</h1><p>Departmental circulars, Tapal, AI rules assistance and staff tools.</p><p><b>Basic is free.</b> Verify your email or phone and start immediately.</p></div>',unsafe_allow_html=True)
- st.markdown('<div class="panel">',unsafe_allow_html=True)
- a,b=st.tabs(['🔐 Sign In','✨ Create Basic Account'])
- with a:
-  e=st.text_input('Email');p=st.text_input('Password',type='password')
-  if st.button('Sign In →',type='primary',use_container_width=True):
-   u=user(e)
-   if u and u.get('active',True) and cp(p,u['password_hash']):sign_in(u)
-   else:st.error('Invalid email/password or inactive account.')
- with b:
-  ch=st.radio('OTP channel',['Email OTP','Phone OTP'],horizontal=True);n=st.text_input('Full Name *');o=st.text_input('Office Name *');d=st.text_input('Designation *');ph=st.text_input('Phone *');em=st.text_input('Email *')
-  ident=em.strip().lower() if ch=='Email OTP' else ph.strip();channel='email' if ch=='Email OTP' else 'phone'
-  if st.button('Send OTP',use_container_width=True):
-   if not n.strip() or not o.strip() or not d.strip() or not email_ok(em) or not phone_ok(ph):st.warning('Fill all fields correctly.')
-   elif channel=='email' and user(em):st.warning('Email already has an account.')
-   else:
-    ok,err=otp_send(ident,channel);st.success('OTP sent.') if ok else st.error(err)
-  code=st.text_input('OTP',max_chars=6)
-  if st.button('Verify OTP',use_container_width=True):
-   ok,err=otp_verify(ident,channel,code);st.session_state.signup_verified=ok;st.session_state.signup_ident=ident;st.success('Verified ✓') if ok else st.error(err)
-  pw=st.text_input('Create Password *',type='password');pw2=st.text_input('Confirm Password *',type='password')
-  if st.button('Create Basic Account →',type='primary',use_container_width=True):
-   if not st.session_state.get('signup_verified') or st.session_state.get('signup_ident')!=ident:st.warning('Verify OTP first.')
-   elif len(pw)<8 or pw!=pw2:st.warning('Password must be 8+ characters and match confirmation.')
-   else:
-    try:
-     supabase.table('users').insert({'email':em.strip().lower(),'phone':ph.strip(),'name':n.strip(),'office_name':o.strip(),'designation':d.strip(),'password_hash':hp(pw),'tier':'Basic','active':True,'email_verified':channel=='email','phone_verified':channel=='phone','profile_complete':True}).execute();sign_in(user(em))
-    except Exception as e:log_error('signup',e);st.error('Could not create account. The email may already exist.')
- st.markdown('</div></div>',unsafe_allow_html=True)
+def try_auto_login():
+    if st.session_state.logged_in: return
+    user = get_user_from_token(read_session_cookie())
+    if user:
+        st.session_state.logged_in = True
+        st.session_state.user = user
 
-def sidebar(u):
- with st.sidebar:
-  st.markdown(f'<div class="card"><div class="title">🧭 {u["name"]}</div><div class="sub">{u.get("office_name","")} · {u.get("designation","")}</div><br>{badge(u.get("tier","Basic"))}</div>',unsafe_allow_html=True)
-  m=st.radio('Navigation',['🏠 Dashboard','📢 Circulars & G.O.s','🤖 AI Rules Assistant','📝 Templates','✉️ Tapal Register','📮 Dispatch Labels','📞 Staff Directory','💳 Plans & Access','⚙️ Admin Command Center'],label_visibility='collapsed')
-  if st.button('🚪 Sign Out',use_container_width=True):
-   try:supabase.table('sessions').delete().eq('email',u['email']).execute();cookies.remove('huddle_session')
-   except:pass
-   st.session_state.logged=False;st.session_state.user=None;st.rerun()
- return m
-
-def app():
- u=user(st.session_state.user['email']);st.session_state.user=u
- m=sidebar(u);tier=u['tier']
- if m=='🏠 Dashboard':
-  header(f'Good {"morning" if datetime.now().hour<12 else "afternoon" if datetime.now().hour<17 else "evening"}, {u["name"].split()[0]} 👋','Your departmental workspace at a glance.')
-  cs=rows('circulars','doc_date');tp=rows('tapal_log','tapal_date');used=ai_usage(u['email']);month=date.today().strftime('%Y-%m');tp=[x for x in tp if str(x.get('tapal_date','')).startswith(month)]
-  for c,l,v in zip(st.columns(4),['Circulars','Tapal this month','AI today','Plan'],[len(cs),len(tp),f'{used}/{DAILY_AI_LIMIT}',tier]):c.markdown(f'<div class="kpi"><label>{l}</label><b>{v}</b></div>',unsafe_allow_html=True)
-  st.markdown('### Quick actions');q=st.columns(4)
-  for c,x,y in zip(q,['📢 Circulars','🤖 Rules AI','✉️ Tapal','📮 Dispatch'],['Search G.O.s','Ask procedures','Record correspondence','Print labels']):c.markdown(f'<div class="card"><div class="title">{x}</div><div class="sub">{y}</div></div>',unsafe_allow_html=True)
- elif m=='📢 Circulars & G.O.s':
-  header('Circulars, G.O.s & Memos','Search reference numbers, subjects and categories.');q=st.text_input('🔍 Search');cat=st.selectbox('Category',['All','Finance / HR','Operations','Confidential','Executive']);data=rows('circulars','doc_date');data=[x for x in data if cat=='All' or x.get('category')==cat];data=[x for x in data if not q.strip() or q.lower() in str(x).lower()]
-  for x in data:
-   st.markdown(f'<div class="card"><div>{badge(x.get("tier","Basic"))} &nbsp; <b>{x.get("ref_id")}</b></div><div class="title">{x.get("title")}</div><div class="sub">📅 {x.get("doc_date")} · 📁 {x.get("category")}</div></div>',unsafe_allow_html=True)
-   if access(tier,x.get('tier','Basic')) and x.get('link'):st.link_button('📥 Open Document',x['link'])
-   elif not access(tier,x.get('tier','Basic')):st.info(f'🔒 Requires {x.get("tier")} access.')
- elif m=='🤖 AI Rules Assistant':
-  header('AI Rules Assistant','Circular-first answers. Provider is controlled by Admin > AI Gateway.');used=ai_usage(u['email']);st.metric('AI queries today',f'{used}/{DAILY_AI_LIMIT}');p=setting('ai_provider','gemini');st.caption(f'Active engine: {PROVIDERS.get(p,PROVIDERS["gemini"])[0]}')
-  if 'messages' not in st.session_state:st.session_state.messages=[]
-  for x in st.session_state.messages:st.markdown(f'<div class="{"chat-user" if x["role"]=="user" else "chat-ai"}">{x["content"]}</div>',unsafe_allow_html=True)
-  if used<DAILY_AI_LIMIT or tier in ['Pro','Max','Admin']:
-   q=st.chat_input('Ask about a rule or circular...')
-   if q:
-    st.session_state.messages.append({'role':'user','content':q});src=circular_search(q);context='You are an internal office rules assistant. Never invent G.O. numbers. Use the supplied circular excerpts first. If not found, say Not found in the uploaded circulars and give brief general guidance. Tell the user to confirm current orders.'+''.join(f'\n---{x.get("ref_id")} {x.get("title")}---\n{x.get("content","")}' for x in src);reply,err=ai_call(q,context);text=err or reply or 'Empty AI response.';st.session_state.messages.append({'role':'assistant','content':text});
-    if not err:ai_inc(u['email'])
-    else:log_error('ai_assistant',err)
+def do_login(u, remember=True):
+    st.session_state.logged_in = True
+    st.session_state.user = u
+    if remember:
+        cookies.set(COOKIE_NAME, create_session_token(u["email"]), max_age=SESSION_DAYS * 24 * 3600)
     st.rerun()
-  else:st.warning('Basic daily AI limit reached.')
-  if st.button('Clear conversation'):st.session_state.messages=[];st.rerun()
- elif m=='📝 Templates':
-  header('Templates','Approved reusable office formats.');
-  for x in rows('templates'):
-   st.markdown(f'<div class="card"><div class="title">📝 {x.get("title")}</div><div class="sub">{x.get("description","")} · {x.get("tier","Basic")}</div></div>',unsafe_allow_html=True)
-   if access(tier,x.get('tier','Basic')) and x.get('link'):st.link_button('📥 Download',x['link'])
- elif m=='✉️ Tapal Register':
-  header('Tapal Register','Record inward and outward correspondence.');a,b,c=st.tabs(['➕ New','📋 Browse','📊 Report'])
-  with a:
-   with st.form('tapal'):
-    direction=st.selectbox('Direction',['Inward','Outward']);d=st.date_input('Date',date.today(),max_value=date.today());ft=st.text_input('From / To *');sub=st.text_input('Subject *');ref=st.text_input('Reference');rem=st.text_area('Remarks')
-    if st.form_submit_button('Save',type='primary'):
-     if not ft.strip() or not sub.strip():st.warning('From/To and Subject are required.')
-     else:supabase.table('tapal_log').insert({'direction':direction,'tapal_date':d.isoformat(),'from_to':ft,'subject':sub,'file_ref':ref or None,'remarks':rem or None,'entered_by':u['email'],'entered_at':iso()}).execute();rows.clear();st.success('Saved.')
-  with b:
-   q=st.text_input('🔍 Search records');data=rows('tapal_log','tapal_date');
-   for x in [x for x in data if not q or q.lower() in str(x).lower()]:st.markdown(f'<div class="card"><div class="title">{"📥" if x.get("direction")=="Inward" else "📤"} {x.get("subject")}</div><div class="sub">{x.get("from_to")} · {x.get("tapal_date")} · {x.get("file_ref","")}</div></div>',unsafe_allow_html=True)
-  with c:st.info('Use the Browse tab for live records. Add CSV reporting here later if required.')
- elif m=='📮 Dispatch Labels':
-  header('Dispatch Label Generator','OCR address and create a printable PDF.');photo=st.file_uploader('Address photo/scan',type=['png','jpg','jpeg']);ex=''
-  if photo:
-   try:
-    import pytesseract;from PIL import Image,ImageOps
-    img=ImageOps.exif_transpose(Image.open(photo)).convert('L');ex=pytesseract.image_to_string(img,config='--psm 6').strip();st.image(img,use_container_width=True)
-   except Exception as e:st.warning(f'OCR unavailable: {e}')
-  addr=st.text_area('Confirm address *',ex,height=120);copies=st.number_input('Copies',1,100,1)
-  if st.button('🖨️ Generate Label PDF',type='primary') and addr.strip():
-   try:
-    from reportlab.pdfgen import canvas;from reportlab.lib.units import mm
-    b=io.BytesIO();c=canvas.Canvas(b,pagesize=(220*mm,110*mm));lines=addr.splitlines()
-    for _ in range(int(copies)):
-     c.setFont('Helvetica-Bold',20);y=80*mm
-     for line in lines:c.drawString(10*mm,y,line);y-=9*mm
-     c.showPage()
-    c.save();st.download_button('📥 Download PDF',b.getvalue(),'dispatch_labels.pdf','application/pdf')
-   except Exception as e:log_error('dispatch',e);st.error(str(e))
- elif m=='📞 Staff Directory':
-  header('Staff Directory','Find office contacts.');df=pd.DataFrame(rows('directory'));q=st.text_input('🔍 Search');
-  if q and not df.empty:df=df[df.apply(lambda r:q.lower() in ' '.join(map(str,r.values)).lower(),axis=1)]
-  st.dataframe(df,use_container_width=True,hide_index=True)
- elif m=='💳 Plans & Access':
-  header('Plans & Access','Basic is permanently free. Elevated plans require admin approval.');
-  for c,(n,p,features) in zip(st.columns(3),[('Basic','Free',['Basic circulars','Tapal','Directory','20 AI queries/day']),('Pro','₹199/month',['Priority AI','Pro documents','Advanced templates']),('Max','₹499/month',['Full archive','Advanced AI','Priority routing'])]):
-   with c:
-    st.markdown(f'<div class="plan"><h3>{n}</h3><h2>{p}</h2>'+''.join(f'✓ {z}<br>' for z in features)+'</div>',unsafe_allow_html=True)
-    if n=='Basic':st.button('Current plan',disabled=True,key='pb')
-    elif not access(tier,n) and st.button(f'Request {n}',key='req'+n):supabase.table('access_requests').insert({'user_id':u['id'],'email':u['email'],'requested_tier':n,'status':'pending'}).execute();st.success('Request sent.')
- elif m=='⚙️ Admin Command Center':
-  if tier!='Admin':st.error('Admin access required.');return
-  header('Admin Command Center','Users, documents, AI gateway and diagnostics.');s=st.radio('Admin',['👥 Users','📢 Publisher','🔧 AI Gateway','🩺 Health'],horizontal=True,label_visibility='collapsed')
-  if s=='👥 Users':
-   for x in supabase.table('users').select('*').order('created_at',desc=True).execute().data or []:
-    with st.container(border=True):
-     a,b,c=st.columns([2,1,1]);a.write(f"**{x['name']}** — {x['email']}\n{x.get('office_name','')}");nt=b.selectbox('Tier',['Basic','Pro','Max','Admin'],index=['Basic','Pro','Max','Admin'].index(x.get('tier','Basic')),key='tier'+x['id']);act=c.toggle('Active',value=x.get('active',True),key='act'+x['id']);
-     if st.button('Save',key='save'+x['id']):supabase.table('users').update({'tier':nt,'active':act}).eq('id',x['id']).execute();st.rerun()
-  elif s=='🔧 AI Gateway':
-   p=st.selectbox('Provider',list(PROVIDERS),format_func=lambda x:PROVIDERS[x][0]);name,kind,default_model,default_endpoint=PROVIDERS[p];key=st.text_input('API key',setting(p+'_api_key') or secret(p.upper()+'_API_KEY'),type='password');model=st.text_input('Model',setting(p+'_model',default_model));endpoint=st.text_input('Base URL',setting(p+'_endpoint',default_endpoint),disabled=kind=='gemini');
-   if st.button('Save gateway',type='primary'):
-    set_setting('ai_provider',p);set_setting(p+'_api_key',key);set_setting(p+'_model',model);set_setting(p+'_endpoint',endpoint);st.success('Saved.')
-   if st.button('🧪 Test provider'):
-    r,e=ai_call('Reply exactly: AI gateway connection OK','You are a connection test. Reply exactly with the requested phrase.');st.error(e) if e else st.success(r)
-  elif s=='🩺 Health':
-   e=supabase.table('error_log').select('*').order('occurred_at',desc=True).limit(30).execute().data or [];a,b,c=st.columns(3);a.metric('Users',len(supabase.table('users').select('id').execute().data or []));b.metric('Circulars',len(supabase.table('circulars').select('id').execute().data or []));c.metric('Errors',len(e));
-   for x in e:st.code(f"{x.get('area')} | {x.get('occurred_at')}\n{x.get('message')}")
-  elif s=='📢 Publisher':st.info('Use the publisher implementation from the previous app or add the R2 upload/index workflow next. The schema below supports it.')
 
-if 'logged' not in st.session_state:st.session_state.logged=False;st.session_state.user=None;st.session_state.messages=[]
-if not st.session_state.logged:
- try:
-  u=session_user(cookies.get('huddle_session'))
-  if u:st.session_state.logged=True;st.session_state.user=u
- except:pass
-if st.session_state.logged:app()
-else:login()
+# ---------------- OTP ----------------
+def otp_send(identifier, channel):
+    code = f"{secrets.randbelow(1000000):06d}"
+    supabase.table("otp_verifications").insert({
+        "identifier": identifier, "channel": channel, "purpose": "signup",
+        "code_hash": hash_password(code),
+        "expires_at": (now_utc() + timedelta(minutes=OTP_MIN)).isoformat(),
+    }).execute()
+    if channel == "email":
+        host = secret("SMTP_HOST"); port = int(secret("SMTP_PORT", "587"))
+        usr = secret("SMTP_USERNAME"); pw = secret("SMTP_PASSWORD")
+        sender = secret("SMTP_FROM") or usr
+        if not all([host, usr, pw, sender]):
+            return False, "Email OTP is not configured yet. Use the Request Access tab or ask admin to add SMTP secrets."
+        try:
+            m = EmailMessage()
+            m["Subject"] = "GovDocs AI verification code"
+            m["From"] = sender; m["To"] = identifier
+            m.set_content(f"Your verification code is {code}. It expires in {OTP_MIN} minutes.")
+            with smtplib.SMTP(host, port, timeout=20) as s:
+                s.starttls(); s.login(usr, pw); s.send_message(m)
+            return True, ""
+        except Exception as e:
+            log_error("smtp_otp", repr(e)); return False, str(e)
+    sid = secret("TWILIO_ACCOUNT_SID"); tok = secret("TWILIO_AUTH_TOKEN"); frm = secret("TWILIO_FROM_NUMBER")
+    if not all([sid, tok, frm]):
+        return False, "SMS OTP is not configured yet. Use Email OTP or the Request Access tab."
+    try:
+        from twilio.rest import Client
+        Client(sid, tok).messages.create(body=f"GovDocs AI OTP: {code}. Valid {OTP_MIN} minutes.", from_=frm, to=identifier)
+        return True, ""
+    except Exception as e:
+        log_error("sms_otp", repr(e)); return False, str(e)
+
+def otp_verify(identifier, channel, code):
+    try:
+        r = supabase.table("otp_verifications").select("*").eq("identifier", identifier).eq("channel", channel).eq("purpose", "signup").eq("verified", False).order("created_at", desc=True).limit(1).execute()
+        if not r.data: return False, "Request a new OTP first."
+        x = r.data[0]
+        if datetime.fromisoformat(str(x["expires_at"]).replace("Z", "+00:00")) < now_utc():
+            return False, "OTP expired. Request a new one."
+        if int(x.get("attempts", 0)) >= 5:
+            return False, "Too many attempts. Request a new OTP."
+        supabase.table("otp_verifications").update({"attempts": int(x.get("attempts", 0)) + 1}).eq("id", x["id"]).execute()
+        if not check_password(code.strip(), x["code_hash"]):
+            return False, "Incorrect OTP."
+        supabase.table("otp_verifications").update({"verified": True}).eq("id", x["id"]).execute()
+        return True, ""
+    except Exception as e:
+        log_error("otp_verify", repr(e)); return False, "OTP verification failed."
+
+# ---------------- CACHED DATA ----------------
+@st.cache_data(ttl=30)
+def fetch_circulars(): return supabase.table("circulars").select("*").execute().data or []
+@st.cache_data(ttl=30)
+def fetch_templates(): return supabase.table("templates").select("*").execute().data or []
+@st.cache_data(ttl=30)
+def fetch_tapal(): return supabase.table("tapal_log").select("*").order("tapal_date", desc=True).execute().data or []
+@st.cache_data(ttl=30)
+def fetch_directory(): return supabase.table("directory").select("*").execute().data or []
+
+# ---------------- SETTINGS / ERRORS ----------------
+def get_setting(key, default=""):
+    try:
+        res = supabase.table("app_settings").select("value").eq("key", key).execute()
+        return res.data[0]["value"] if res.data else default
+    except Exception: return default
+
+def set_setting(key, value):
+    if supabase.table("app_settings").select("key").eq("key", key).execute().data:
+        supabase.table("app_settings").update({"value": value}).eq("key", key).execute()
+    else:
+        supabase.table("app_settings").insert({"key": key, "value": value}).execute()
+
+def log_error(area, message):
+    try: supabase.table("error_log").insert({"area": area, "message": str(message)[:2000], "occurred_at": datetime.utcnow().isoformat()}).execute()
+    except Exception: pass
+
+# ---------------- AI USAGE ----------------
+def log_ai_usage(email):
+    today = date.today().isoformat()
+    res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", today).execute()
+    if res.data:
+        row = res.data[0]
+        supabase.table("ai_usage").update({"count": row["count"] + 1}).eq("id", row["id"]).execute()
+        return row["count"] + 1
+    supabase.table("ai_usage").insert({"email": email, "day": today, "count": 1}).execute()
+    return 1
+
+def get_ai_usage_today(email):
+    res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", date.today().isoformat()).execute()
+    return res.data[0]["count"] if res.data else 0
+
+# ----------------
