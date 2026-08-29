@@ -216,7 +216,7 @@ def get_r2_client():
                         aws_access_key_id=st.secrets["R2_ACCESS_KEY_ID"], aws_secret_access_key=st.secrets["R2_SECRET_ACCESS_KEY"], region_name="auto")
 
 def upload_to_r2(file_bytes, object_name):
-    get_r2_client().put_object(Bucket=st.secrets["R2_BUCKET_NAME"], Key=object_name, Body=file_bytes, ContentType="application/pdf")
+    get_r2_client().put_object( Bucket=st.secrets.get("R2_BUCKET_NAME", "circulars"),, Key=object_name, Body=file_bytes, ContentType="application/pdf")
     return f"{st.secrets['R2_PUBLIC_URL'].rstrip('/')}/{object_name}"
 
 def extract_pdf_text(file_bytes):
