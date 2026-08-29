@@ -286,40 +286,64 @@ def search_uploaded_circulars(question, limit=4):
         return res.data or []
     except Exception as e:
         log_error("ai_search", str(e)); return []
-
-def ask_ai(user_prompt, sys_context, provider_override=None, api_key_override=None):
-    provider = (provider_override or get_setting("ai_provider", "gemini")).lower()
+def _call_provider(provider, user_prompt, sys_context, api_key_override=None):
+    provider = provider.lower()
     if provider == "groq":
         api_key = api_key_override or get_setting("groq_api_key") or st.secrets.get("GROQ_API_KEY", "")
         model_id = get_setting("groq_model", "llama-3.3-70b-versatile")
-        if not api_key: return None, "No Groq API key set. Add one in Admin → AI & Gateway Settings."
+        if not api_key:
+            return None, "no_key"
         try:
             from openai import OpenAI
             r = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1").chat.completions.create(
-                model=model_id, messages=[{"role": "system", "content": sys_context}, {"role": "user", "content": user_prompt}])
+                model=model_id,
+                messages=[{"role": "system", "content": sys_context}, {"role": "user", "content": user_prompt}],
+            )
             return r.choices[0].message.content, None
-        except Exception as e: return None, f"Groq error: {e}"
+        except Exception as e:
+            return None, f"Groq error: {e}"
     if provider == "qwen":
         api_key = api_key_override or get_setting("qwen_api_key") or st.secrets.get("QWEN_API_KEY", "")
         model_id = get_setting("qwen_model", "qwen-plus")
         base_url = get_setting("qwen_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        if not api_key: return None, "No Qwen API key set. Add one in Admin → AI & Gateway Settings."
+        if not api_key:
+            return None, "no_key"
         try:
             from openai import OpenAI
             r = OpenAI(api_key=api_key, base_url=base_url).chat.completions.create(
-                model=model_id, messages=[{"role": "system", "content": sys_context}, {"role": "user", "content": user_prompt}])
+                model=model_id,
+                messages=[{"role": "system", "content": sys_context}, {"role": "user", "content": user_prompt}],
+            )
             return r.choices[0].message.content, None
-        except Exception as e: return None, f"Qwen error: {e}"
+        except Exception as e:
+            return None, f"Qwen error: {e}"
     api_key = api_key_override or get_setting("gemini_api_key") or st.secrets.get("GEMINI_API_KEY", "")
     model_id = get_setting("gemini_model", "gemini-2.0-flash")
-    if not api_key: return None, "No Gemini API key set. Add one in Admin → AI & Gateway Settings."
+    if not api_key:
+        return None, "no_key"
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
-        resp = client.models.generate_content(model=model_id, contents=f"{sys_context}\n\nQuestion: {user_prompt}")
-        return resp.text, None
-    except Exception as e: return None, f"Gemini error: {e}"
-
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_id)
+        response = model.generate_content(f"{sys_context}\n\nQuestion: {user_prompt}")
+        return response.text, None
+    except Exception as e:
+        return None, f"Gemini error: {e}"
+def ask_ai(user_prompt, sys_context, provider_override=None, api_key_override=None):
+    primary = (provider_override or get_setting("ai_provider", "gemini")).lower()
+    order = [primary] + [p for p in ["groq", "gemini", "qwen"] if p != primary]
+    last_err = None
+    for p in order:
+        key = api_key_override if p == primary else None
+        reply, err = _call_provider(p, user_prompt, sys_context, key)
+        if reply is not None:
+            return reply, None
+        last_err = err
+        if err != "no_key":
+            log_error("ai_fallback", f"{p} failed: {err}")
+    if last_err and last_err != "no_key":
+        return None, last_err
+    return None, "No AI provider available. Add an API key in Admin → AI & Gateway Settings."
 def show_login():
     st.markdown("""
     <div class="login-shell"><div class="login-panel">
