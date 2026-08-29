@@ -520,7 +520,68 @@ def render_sidebar(user):
     return menu
 
 def topbar(user):
-    st.markdown(f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div><div class="app-topbar-sub">Internal
+    st.markdown(f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div><div class="app-topbar-sub">Internal productivity tools · Always verify official rules before action</div></div><div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#64748B;">{tier_badge(user.get("tier","Staff"))}<span>{safe_str(user.get("name"))}</span></div></div>', unsafe_allow_html=True)
+
+def show_home(user):
+    page_header(f"{greeting()}, {user['name'].split()[0]} 👋", "Here's your workspace overview.")
+    circ = len(fetch_circulars())
+    month_start = date.today().replace(day=1).isoformat()
+    tapal = len([r for r in fetch_tapal() if safe_str(r.get("tapal_date")) >= month_start])
+    used = get_ai_usage_today(user["email"])
+    cols = st.columns(4)
+    for col, (label, value, foot) in zip(cols, [("Circulars on file", circ, "Indexed records"), ("Tapal this month", tapal, "Inward + outward"), ("AI queries today", f"{used}/{DAILY_AI_LIMIT}", "Daily allowance"), ("Access tier", user.get("tier", "Staff"), "Workspace level")]):
+        with col:
+            st.markdown(f"<div class='kpi-card'><div class='kpi-label'>{label}</div><div class='kpi-value'>{value}</div><div class='kpi-foot'>{foot}</div></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    left, right = st.columns([1.55, 1])
+    with left:
+        st.markdown("### Quick access")
+        for icon, t, d in [("📢", "Circulars & G.O.s", "Search references, subjects and departments."), ("🤖", "AI Rules Assistant", "Ask questions against your indexed circulars."), ("✉️", "Tapal Register", "Log and browse correspondence."), ("📝", "Templates", "Access approved office formats.")]:
+            st.markdown(f"<div class='doc-card'><div class='doc-title'>{icon} {t}</div><div class='doc-meta'>{d}</div></div>", unsafe_allow_html=True)
+    with right:
+        st.markdown("### Workspace notes")
+        with st.container(border=True):
+            st.markdown("**AI answers are decision support, not official orders.**")
+            st.caption("Confirm current G.O.s and establishment instructions before official action.")
+            st.markdown("**Document access**")
+            st.caption("Pro and Max records are protected by your account tier.")
+
+def show_circulars(user):
+    page_header("Circulars, G.O.s & Memos", "Search by reference number, subject, category or year.")
+    c1, c2, c3 = st.columns([2.8, 1.1, 1])
+    with c1: query = st.text_input("Search", placeholder="Search by G.O. number, title, subject...", label_visibility="collapsed")
+    with c2: category = st.selectbox("Category", ["All", "Finance / HR", "Operations", "Confidential", "Executive"], label_visibility="collapsed")
+    with c3: year_f = st.selectbox("Year", ["All"] + [str(y) for y in sorted({r.get("year") for r in fetch_circulars() if r.get("year")}, reverse=True)], label_visibility="collapsed")
+    rows = fetch_circulars()
+    if category != "All": rows = [r for r in rows if r.get("category") == category]
+    if year_f != "All": rows = [r for r in rows if safe_str(r.get("year")) == year_f]
+    if query.strip():
+        q = query.lower()
+        rows = [r for r in rows if q in safe_str(r.get("title")).lower() or q in safe_str(r.get("ref_id")).lower() or q in safe_str(r.get("category")).lower()]
+    st.caption(f"{len(rows)} document(s) found")
+    if not rows:
+        st.info("No documents match your filters."); return
+    for item in rows:
+        tier = item.get("tier", "Basic")
+        allowed = has_access(user.get("tier", "Staff"), tier)
+        lock = "" if allowed else "🔒 "
+        st.markdown(f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{safe_str(item.get("ref_id"))}</span>{tier_badge(tier)}</div><div class="doc-title">{lock}{safe_str(item.get("title"))}</div><div class="doc-meta"><span>📅 {safe_str(item.get("doc_date"))}</span><span>📁 {safe_str(item.get("category"))}</span><span>📆 {safe_str(item.get("year"))}</span></div></div>', unsafe_allow_html=True)
+        if allowed:
+            dl_key = f"dl_{item.get('id')}"
+            if st.button("📥 Download PDF", key=dl_key):
+                st.session_state[dl_key] = True
+            if st.session_state.get(dl_key):
+                try:
+                    pdf_bytes = fetch_and_decompress(safe_str(item.get("link")))
+                    fname = safe_str(item.get("ref_id")).replace(" ", "_").replace("/", "-") + ".pdf"
+                    st.download_button("💾 Save PDF to device", pdf_bytes, file_name=fname, mime="application/pdf", key=f"save_{item.get('id')}")
+                    st.caption("Stored compressed in R2 · decompressed on the fly · text brain lives in Supabase.")
+                except Exception as e:
+                    log_error("doc_download", str(e))
+                    st.error("Could not fetch the document. Try again in a moment.")
+        else:
+            st.button(f"🔒 Upgrade to {tier}", key=f"up_{item.get('id')}", on_click=lambda t=tier: st.session_state.update({"billing_hint": t}))
+
     def show_ai(user):
     page_header("AI Rules Assistant", "Ask about leave, TA/DA, service rules and indexed office circulars.")
     used = get_ai_usage_today(user["email"])
