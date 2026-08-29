@@ -210,7 +210,8 @@ def do_login(u, remember=True):
     components.html(
         "<script>document.cookie='huddle_session=" + token
         + "; max-age=2592000; path=/; SameSite=Lax';</script>",
-        height=0, width=0,
+        height=0,
+        width=0,
     )
 
 def otp_send(identifier, channel):
