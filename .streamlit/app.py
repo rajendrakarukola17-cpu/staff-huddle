@@ -202,6 +202,16 @@ def do_login(u, remember=True):
     if remember:
         st.session_state["session_token"] = create_session_token(u["email"])
     st.rerun()
+    def persist_session_cookie():
+    token = st.session_state.get("session_token")
+    if not token:
+        return
+    import streamlit.components.v1 as components
+    components.html(
+        "<script>document.cookie='huddle_session=" + token
+        + "; max-age=2592000; path=/; SameSite=Lax';</script>",
+        height=0, width=0,
+    )
 
 def otp_send(identifier, channel):
     code = f"{secrets.randbelow(1000000):06d}"
