@@ -371,12 +371,13 @@ def ask_ai(user_prompt, sys_context, provider_override=None, api_key_override=No
 
 # ---------------- CLOUD CHROME COVER ----------------
 def hide_cloud_chrome():
-    import streamlit.components.v1 as components
     st.markdown(
         """
         <style>
         div.cloud-cover-top{position:fixed;top:0;right:0;width:380px;height:75px;background:#FFFFFF;z-index:2147483647 !important;}
         div.cloud-cover-bottom{position:fixed;bottom:0;right:0;width:300px;height:100px;background:#FFFFFF;z-index:2147483647 !important;}
+        #root > *:not([data-testid="stAppViewContainer"]){display:none !important;}
+        body > *:not(#root){display:none !important;}
         </style>
         <div class="cloud-cover-top"></div>
         <div class="cloud-cover-bottom"></div>
