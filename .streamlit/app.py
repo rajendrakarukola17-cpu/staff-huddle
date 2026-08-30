@@ -17,7 +17,7 @@ import bcrypt
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
-from streamlit_cookies_controller import CookieController
+import extra_streamlit_components as stx
 
 try:
     import cv2
