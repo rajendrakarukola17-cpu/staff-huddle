@@ -639,12 +639,51 @@ def index_circular_for_ai(circular_id, text):
     except Exception as e:
         log_error("ai_indexing_pointer", str(e))
         return 0
+@st.cache_data(ttl=1800)
 def search_uploaded_circulars(question, limit=4):
+    """Fetch lightweight pointers from DB, download compressed payload from R2."""
     try:
-        res = supabase.rpc("search_circular_chunks", {"q": question, "limit_count": limit}).execute()
-        return res.data or []
+        # 1. Get all indexed circulars with payload URLs
+        res = supabase.table("circulars").select(
+            "id, ref_id, title, payload_url"
+        ).eq("ai_indexed", True).execute()
+        if not res.data:
+            return []
+        
+        results = []
+        q_lower = question.lower()
+        
+        # 2. Search payloads locally
+        for circ in res.data:
+            if not circ.get("payload_url"):
+                continue
+            
+            try:
+                gz_data = fetch_and_decompress(circ["payload_url"])
+                payload = json.loads(gz_data.decode('utf-8'))
+                
+                score = 0
+                matched_chunks = []
+                for chunk in payload.get("chunks", []):
+                    if q_lower in chunk.lower():
+                        score += 1
+                        matched_chunks.append(chunk)
+                
+                if score > 0:
+                    results.append({
+                        "ref_id": circ["ref_id"],
+                        "title": circ["title"],
+                        "content": " ... ".join(matched_chunks[:2]),
+                        "score": score
+                    })
+            except Exception as e:
+                log_error("payload_fetch", f"ID {circ['id']}: {e}")
+                continue
+        
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:limit]
     except Exception as e:
-        log_error("ai_search", str(e))
+        log_error("ai_search_pointer", str(e))
         return []
 
 def _call_one(p, key, model, ep, prompt, context):
