@@ -184,7 +184,7 @@ def get_user_supabase_client(user_email):
         log_error("rls_jwt", str(e))
         return supabase
 
-cookies = CookieController()
+cookie_manager = stx.CookieManager()
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
