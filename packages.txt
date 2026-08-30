@@ -1,1 +1,3 @@
 tesseract-ocr
+tesseract-ocr-tel
+libgl1
