@@ -241,13 +241,17 @@ def get_user_from_token(token):
 
 def read_session_cookie():
     try:
-        return st.context.cookies.get(COOKIE_NAME)
+        # Try Streamlit Cloud native cookies first
+        token = st.context.cookies.get(COOKIE_NAME)
+        if token:
+            return token
     except Exception:
-        try:
-            return cookies.get(COOKIE_NAME)
-        except Exception:
-            return None
-
+        pass
+    # Fallback to extra-streamlit-components
+    try:
+        return cookie_manager.get(cookie=COOKIE_NAME)
+    except Exception:
+        return None
 def clear_session_token(token):
     if token:
         supabase.table("sessions").delete().eq("token_hash", _hash_token(token)).execute()
