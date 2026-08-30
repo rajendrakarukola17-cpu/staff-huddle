@@ -939,7 +939,7 @@ def _circulars_browser(user):
 def show_templates(user):
     page_header("Drafts & Templates", "Pre-approved office formats and personal quick-fill templates.")
     
-    t1, t2 = st.tabs(["📋 Institutional Templates", "⚡ My Quick-Fill Templates"])
+    t1, t2, t3 = st.tabs(["📋 Institutional Templates", "⚡ My Quick-Fill Addresses", "✍️ My Templates & AI Style"])
     
     with t1:
         rows = fetch_letter_templates()
@@ -953,7 +953,6 @@ def show_templates(user):
                     st.markdown(f"**Category:** {template.get('category', 'General')}")
                     st.markdown(f"**Description:** {template.get('description', 'No description')}")
                     
-                    # Extract placeholders
                     content = template.get("content", "")
                     placeholders = re.findall(r'\{\{(\w+)\}\}', content)
                     
@@ -997,6 +996,97 @@ def show_templates(user):
                     st.session_state[f"editing_addr_{i}"] = False
                     st.success("Saved!")
                     st.rerun()
+    
+    with t3:
+        st.markdown("### 📝 Your Personal Letter Templates")
+        st.caption("Save your own letters here. The AI will learn your writing style, tone, and formatting preferences.")
+        
+        # Fetch user's personal templates
+        user_templates = supabase.table("personal_templates").select("*").eq("user_email", user["email"]).order("created_at", desc=True).execute().data or []
+        
+        if user_templates:
+            st.markdown(f"**You have {len(user_templates)} saved template(s)**")
+            for tmpl in user_templates:
+                with st.container(border=True):
+                    st.markdown(f"**{tmpl['title']}** ({tmpl.get('category', 'General')})")
+                    st.caption(f"Created: {tmpl.get('created_at', 'Unknown')}")
+                    with st.expander("View content"):
+                        st.text_area("", value=tmpl['content'], height=200, disabled=True, key=f"view_tmpl_{tmpl['id']}")
+                    if st.button("🗑️ Delete", key=f"del_ptmpl_{tmpl['id']}"):
+                        supabase.table("personal_templates").delete().eq("id", tmpl["id"]).execute()
+                        st.rerun()
+        else:
+            st.info("No personal templates yet. Create your first one below!")
+        
+        st.divider()
+        st.markdown("### ✨ Create New Personal Template")
+        with st.form("create_personal_template"):
+            pt_title = st.text_input("Template Title *", placeholder="e.g., Leave Application, Vehicle NoC Request")
+            pt_category = st.selectbox("Category", ["General", "Leave", "Enforcement", "Vehicle", "Finance", "Other"])
+            pt_content = st.text_area("Letter Content *", height=300, placeholder="Paste your complete letter here. The AI will analyze your style, formatting, and tone...")
+            
+            if st.form_submit_button("💾 Save Template", type="primary", use_container_width=True):
+                if not pt_title.strip() or not pt_content.strip():
+                    st.warning("Title and content are required.")
+                else:
+                    supabase.table("personal_templates").insert({
+                        "user_email": user["email"],
+                        "title": pt_title.strip(),
+                        "category": pt_category,
+                        "content": pt_content.strip(),
+                        "created_at": datetime.utcnow().isoformat()
+                    }).execute()
+                    st.success("Template saved! The AI will now learn from your writing style.")
+                    st.rerun()
+        
+        st.divider()
+        st.markdown("### 🤖 AI Style-Cloning Drafter")
+        st.caption("Select 2-3 of your saved templates to train the AI. It will mimic your exact style, tone, and formatting.")
+        
+        if len(user_templates) < 2:
+            st.warning("Save at least 2 personal templates first to enable AI style-cloning.")
+        else:
+            selected_for_style = st.multiselect(
+                "Select templates for style training (2-3 recommended)",
+                [t["title"] for t in user_templates],
+                max_selections=3,
+                key="style_templates_select"
+            )
+            
+            if selected_for_style:
+                style_context = ""
+                for title in selected_for_style:
+                    tmpl = next((t for t in user_templates if t["title"] == title), None)
+                    if tmpl:
+                        style_context += f"\n\n--- Example {len(style_context.split('---'))}: {title} ---\n{tmpl['content']}"
+                
+                st.markdown("### ✍️ Draft New Letter")
+                draft_subject = st.text_input("Subject / Topic *", placeholder="e.g., Request for Compensatory Casual Leave")
+                draft_details = st.text_area("Key Details", height=100, placeholder="What should the letter cover? (e.g., dates, reasons, specific requests)")
+                
+                if st.button("🎨 Generate with My Style", type="primary", use_container_width=True):
+                    if not draft_subject.strip():
+                        st.warning("Please enter a subject.")
+                    else:
+                        with st.spinner("AI is drafting in your personal style..."):
+                            style_prompt = (
+                                "You are an AI assistant that writes letters in the user's personal style. "
+                                "Analyze the writing style, tone, formatting, and vocabulary from the examples below. "
+                                "Then draft a new letter on the given subject using that exact style.\n\n"
+                                f"USER'S STYLE EXAMPLES:{style_context}\n\n"
+                                f"NEW LETTER SUBJECT: {draft_subject}\n"
+                                f"KEY DETAILS: {draft_details}\n\n"
+                                "Generate the complete letter now, matching the user's style exactly."
+                            )
+                            
+                            reply, err = ai_call(style_prompt, "You are a style-cloning assistant.")
+                            
+                            if err:
+                                st.error(f"AI error: {err}")
+                            else:
+                                st.markdown("### 📄 Generated Letter")
+                                st.text_area("", value=reply, height=400, key="generated_letter")
+                                st.download_button("📥 Download Letter", reply.encode(), f"{draft_subject}.txt", "text/plain")
 
 def show_tapal(user):
     page_header("Tapal Workspace", "Log, browse and report inward/outward correspondence.")
