@@ -254,9 +254,17 @@ def read_session_cookie():
         return None
 def clear_session_token(token):
     if token:
-        supabase.table("sessions").delete().eq("token_hash", _hash_token(token)).execute()
+        try:
+            supabase.table("sessions").delete().eq("token_hash", _hash_token(token)).execute()
+        except Exception:
+            pass
+    # Clear both cookie systems
     try:
-        cookies.remove(COOKIE_NAME)
+        cookie_manager.delete(COOKIE_NAME)
+    except Exception:
+        pass
+    try:
+        st.context.cookies[COOKIE_NAME] = ""
     except Exception:
         pass
 
