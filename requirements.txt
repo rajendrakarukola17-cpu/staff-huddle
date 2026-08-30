@@ -11,3 +11,4 @@ Pillow>=10.4
 pytesseract>=0.3.10
 reportlab>=4.2
 twilio>=9.0
+python-jose[cryptography]
