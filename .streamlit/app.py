@@ -1,3 +1,4 @@
+from jose import jwt
 import gzip
 import html
 import io
@@ -9,6 +10,7 @@ import threading
 import json
 import tempfile
 import time
+import numpy as np
 from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 import bcrypt
@@ -18,16 +20,9 @@ from supabase import create_client, Client
 from streamlit_cookies_controller import CookieController
 
 try:
-    from jose import jwt
-    JOSE_AVAILABLE = True
-except ImportError:
-    JOSE_AVAILABLE = False
-
-try:
     import cv2
     import pytesseract
     from PIL import Image, ImageEnhance, ImageOps
-    import numpy as np
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
@@ -157,15 +152,16 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 
 def get_user_supabase_client(user_email):
-    if not JOSE_AVAILABLE:
-        return supabase
+    """Create user-specific Supabase client with forged JWT for RLS enforcement"""
     try:
         jwt_secret = st.secrets.get("SUPABASE_JWT_SECRET")
         if not jwt_secret:
             return supabase
+        
         user = get_user(user_email)
         if not user:
             return supabase
+        
         now = int(datetime.now(timezone.utc).timestamp())
         payload = {
             "sub": str(user["id"]),
@@ -176,7 +172,9 @@ def get_user_supabase_client(user_email):
             "app_metadata": {"provider": "email"},
             "user_metadata": {}
         }
+        
         token = jwt.encode(payload, jwt_secret, algorithm="HS256")
+        
         return create_client(
             st.secrets["SUPABASE_URL"],
             st.secrets["SUPABASE_KEY"],
@@ -577,31 +575,46 @@ def index_circular_for_ai(circular_id, text):
         chunks = chunk_text(text)
         if not chunks:
             supabase.table("circulars").update({"ai_indexed": False}).eq("id", circular_id).execute()
-           def hide_cloud_chrome():
-    st.markdown("""
-    <style>
-    #MainMenu{visibility:hidden !important;}
-    footer{visibility:hidden !important;}
-    header{visibility:hidden !important; height:0 !important;}
-    [data-testid="stToolbar"]{visibility:hidden !important; display:none !important;}
-    [data-testid="stDecoration"]{visibility:hidden !important;}
-    [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}
-    [data-testid="stAppDeployButton"]{display:none !important;}
-    .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}
-    [data-testid="collapsedControl"],[data-testid="stSidebarCollapsedControl"]{visibility:visible !important;}
-    </style>
-    """, unsafe_allow_html=True)
+            return 0
+        rows = [{"circular_id": circular_id, "chunk_no": i, "content": ch} for i, ch in enumerate(chunks)]
+        supabase.table("circular_chunks").insert(rows).execute()
+        supabase.table("circulars").update({"ai_indexed": True}).eq("id", circular_id).execute()
+        return len(chunks)
+    except Exception as e:
+        log_error("ai_indexing", str(e))
+        return 0
 
-def show_full_chrome():
-    st.markdown("""
-    <style>
-    #MainMenu{visibility:visible !important;}
-    footer{visibility:hidden !important;}
-    header{visibility:visible !important;}
-    [data-testid="stToolbar"]{visibility:visible !important; display:flex !important;}
-    [data-testid="stStatusWidget"]{visibility:visible !important; display:flex !important;}
-    </style>
-    """, unsafe_allow_html=True)
+@st.cache_data(ttl=1800)
+def search_uploaded_circulars(question, limit=4):
+    try:
+        res = supabase.rpc("search_circular_chunks", {"q": question, "limit_count": limit}).execute()
+        return res.data or []
+    except Exception as e:
+        log_error("ai_search", str(e))
+        return []
+
+def _call_one(p, key, model, ep, prompt, context):
+    name, kind, dm, de = PROVIDERS.get(p, PROVIDERS["gemini"])
+    if not key:
+        return None, f"{name}: no API key"
+    try:
+        if kind == "gemini":
+            try:
+                from google import genai
+                from google.genai import types
+                c = genai.Client(api_key=key)
+                r = c.models.generate_content(model=model, contents=prompt, config=types.GenerateContentConfig(system_instruction=context, temperature=0.15))
+                return r.text, None
+            except ImportError:
+                import google.generativeai as g2
+                g2.configure(api_key=key)
+                return g2.GenerativeModel(model).generate_content(f"{context}\n\nQuestion: {prompt}").text, None
+        from openai import OpenAI
+        c = OpenAI(api_key=key, base_url=(ep or de).rstrip("/"))
+        r = c.chat.completions.create(model=model, messages=[{"role": "system", "content": context}, {"role": "user", "content": prompt}], temperature=0.15)
+        return r.choices[0].message.content, None
+    except Exception as e:
+        return None, f"{name} error: {e}"
 
 def ai_call(prompt, context):
     primary = get_setting("ai_provider", "gemini")
@@ -632,36 +645,31 @@ def hide_cloud_chrome():
     [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}
     [data-testid="stAppDeployButton"]{display:none !important;}
     .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}
-    
-    /* ENSURE SIDEBAR TOGGLE IS ALWAYS VISIBLE */
-    [data-testid="collapsedControl"]{
-        visibility:visible !important; 
-        display:block !important;
-        position:fixed !important;
-        left:0 !important;
-        top:50% !important;
-        z-index:999999 !important;
-        background:#1E3A5F !important;
-        color:#fff !important;
-        padding:10px !important;
-        border-radius:0 8px 8px 0 !important;
-        cursor:pointer !important;
-    }
-    [data-testid="stSidebarCollapsedControl"]{
-        visibility:visible !important;
-        display:block !important;
-    }
-    [data-testid="stSidebar"]{
-        visibility:visible !important;
-    }
+    [data-testid="collapsedControl"]{visibility:visible !important; display:block !important;}
+    [data-testid="stSidebarCollapsedControl"]{visibility:visible !important; display:block !important;}
     </style>
     """, unsafe_allow_html=True)
 
 def show_full_chrome():
-    st.markdown("""<style>#MainMenu{visibility:visible !important;}footer{visibility:hidden !important;}header{visibility:visible !important;}[data-testid="stToolbar"]{visibility:visible !important; display:flex !important;}[data-testid="stStatusWidget"]{visibility:visible !important; display:flex !important;}</style>""", unsafe_allow_html=True)
+    st.markdown("""
+    <style>
+    #MainMenu{visibility:visible !important;}
+    footer{visibility:hidden !important;}
+    header{visibility:visible !important;}
+    [data-testid="stToolbar"]{visibility:visible !important; display:flex !important;}
+    [data-testid="stStatusWidget"]{visibility:visible !important; display:flex !important;}
+    </style>
+    """, unsafe_allow_html=True)
 
 def show_login():
-    st.markdown("""<div class="login-shell"><div class="login-panel"><div class="login-brand"><div class="login-mark">🏛️</div><h1>GovDocs AI</h1><p>AI-powered government document workspace for circulars, G.O.s, Tapal, templates and internal rules assistance.</p><div style="margin-top:25px;font-size:11px;color:rgba(255,255,255,.72);line-height:1.8;"><b style="color:#fff;">Instant staff accounts</b><br>Verify your email with OTP · Basic is free forever · Pro/Max by admin approval</div></div><div class="login-form"><h2>Welcome</h2><div class="muted">Sign in, or create your account in 60 seconds.</div></div></div></div>""", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="login-shell"><div class="login-panel">
+    <div class="login-brand"><div class="login-mark">🏛️</div><h1>GovDocs AI</h1>
+    <p>AI-powered government document workspace for circulars, G.O.s, Tapal, templates and internal rules assistance.</p>
+    <div style="margin-top:25px;font-size:11px;color:rgba(255,255,255,.72);line-height:1.8;"><b style="color:#fff;">Instant staff accounts</b><br>Verify your email with OTP · Basic is free forever · Pro/Max by admin approval</div>
+    </div>
+    <div class="login-form"><h2>Welcome</h2><div class="muted">Sign in, or create your account in 60 seconds.</div></div>
+    </div></div>""", unsafe_allow_html=True)
     _, c2, _ = st.columns([1, 1.35, 1])
     with c2:
         tab_login, tab_signup, tab_request = st.tabs(["Sign In", "Create Account", "Request Access"])
@@ -769,7 +777,13 @@ def render_sidebar(user):
     return menu
 
 def topbar(user):
-    st.markdown(f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div><div class="app-topbar-sub">Internal · {safe_str(user.get("office_name")) or "GovDocs AI"}</div></div><div style="text-align:right;"><div class="app-topbar-title">{date.today().strftime("%d %b %Y")}</div><div class="app-topbar-sub">{esc(user.get("name"))} · {esc(user.get("tier", "Staff"))}</div></div></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div>'
+        f'<div class="app-topbar-sub">Internal · {safe_str(user.get("office_name")) or "GovDocs AI"}</div></div>'
+        f'<div style="text-align:right;"><div class="app-topbar-title">{date.today().strftime("%d %b %Y")}</div>'
+        f'<div class="app-topbar-sub">{esc(user.get("name"))} · {esc(user.get("tier", "Staff"))}</div></div></div>',
+        unsafe_allow_html=True,
+    )
 
 def show_ai(user):
     page_header("AI Rules Assistant", "Ask about leave, TA/DA, service rules and indexed office circulars.")
@@ -872,7 +886,12 @@ def show_home(user):
     else:
         for c_ in recent:
             allowed = has_access(user.get("tier", "Staff"), c_.get("tier", "Basic"))
-            st.markdown(f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{esc(c_.get("ref_id"))}</span>{tier_badge(c_.get("tier", "Basic"))}</div><div class="doc-title">{esc(c_.get("title"))}</div><div class="doc-meta">🗂️ {esc(c_.get("category"))} · 📅 {esc(c_.get("doc_date"))}</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{esc(c_.get("ref_id"))}</span>{tier_badge(c_.get("tier", "Basic"))}</div>'
+                f'<div class="doc-title">{esc(c_.get("title"))}</div>'
+                f'<div class="doc-meta">🗂️ {esc(c_.get("category"))} · 📅 {esc(c_.get("doc_date"))}</div></div>',
+                unsafe_allow_html=True,
+            )
             if allowed and c_.get("link"):
                 render_doc_open_link(c_, "home")
             elif not allowed:
@@ -909,7 +928,12 @@ def _circulars_browser(user):
     for r in rows:
         allowed = has_access(user.get("tier", "Staff"), r.get("tier", "Basic"))
         sup = f" · Supersedes {esc(r.get('supersedes'))}" if r.get("supersedes") else ""
-        st.markdown(f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{esc(r.get("ref_id"))}</span>{tier_badge(r.get("tier", "Basic"))}</div><div class="doc-title">{esc(r.get("title"))}</div><div class="doc-meta">🗂️ {esc(r.get("category"))} · 📅 {esc(r.get("doc_date"))}{sup}</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="doc-card"><div class="doc-row"><span class="doc-ref">{esc(r.get("ref_id"))}</span>{tier_badge(r.get("tier", "Basic"))}</div>'
+            f'<div class="doc-title">{esc(r.get("title"))}</div>'
+            f'<div class="doc-meta">🗂️ {esc(r.get("category"))} · 📅 {esc(r.get("doc_date"))}{sup}</div></div>',
+            unsafe_allow_html=True,
+        )
         col1, col2 = st.columns([1, 5])
         with col1:
             if allowed and r.get("link"):
@@ -976,7 +1000,7 @@ def show_templates(user):
             user_templates = supabase.table("personal_templates").select("*").eq("user_email", user["email"]).order("created_at", desc=True).execute().data or []
         except Exception:
             user_templates = []
-            st.info("ℹ️ Note: Personal templates feature requires the 'personal_templates' table in Supabase. Run the SQL provided in the setup instructions.")
+            st.info("ℹ️ Note: Personal templates feature requires the 'personal_templates' table in Supabase.")
         if user_templates:
             st.markdown(f"**You have {len(user_templates)} saved template(s)**")
             for tmpl in user_templates:
@@ -1011,7 +1035,7 @@ def show_templates(user):
                         st.success("Template saved! The AI will now learn from your writing style.")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Failed to save template. Ensure the 'personal_templates' table exists in Supabase. Error: {e}")
+                        st.error(f"Failed to save template. Error: {e}")
         st.divider()
         st.markdown("### 🤖 AI Style-Cloning Drafter")
         st.caption("Select 2-3 of your saved templates to train the AI. It will mimic your exact style, tone, and formatting.")
@@ -1095,7 +1119,7 @@ def show_tapal(user):
                         st.success("Entry saved successfully!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Database save failed. Please ensure you ran the SQL update. Details: {str(e)}")
+                        st.error(f"Database save failed. Details: {str(e)}")
     with t2:
         rows = fetch_tapal()
         a, b = st.columns([3, 1])
