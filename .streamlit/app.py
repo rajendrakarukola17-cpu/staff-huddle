@@ -597,23 +597,48 @@ def optimize_pdf(file_bytes):
 def chunk_text(text, size=1200):
     text = text.strip()
     return [text[i:i+size].strip() for i in range(0, len(text), size) if text[i:i+size].strip()] if text else []
-
 def index_circular_for_ai(circular_id, text):
+    """Pointer & Payload: Compress text to R2, store only URL in DB."""
     try:
-        supabase.table("circular_chunks").delete().eq("circular_id", circular_id).execute()
         chunks = chunk_text(text)
         if not chunks:
             supabase.table("circulars").update({"ai_indexed": False}).eq("id", circular_id).execute()
             return 0
-        rows = [{"circular_id": circular_id, "chunk_no": i, "content": ch} for i, ch in enumerate(chunks)]
-        supabase.table("circular_chunks").insert(rows).execute()
-        supabase.table("circulars").update({"ai_indexed": True}).eq("id", circular_id).execute()
+        
+        # 1. Create payload JSON
+        payload = {"circular_id": circular_id, "chunks": chunks}
+        payload_json = json.dumps(payload).encode('utf-8')
+        
+        # 2. Compress heavily
+        payload_gz = gzip.compress(payload_json, compresslevel=9)
+        
+        # 3. Upload to R2
+        object_name = f"ai_payloads/circular_{circular_id}_chunks.json.gz"
+        payload_url = upload_to_r2(
+            payload_gz, 
+            object_name, 
+            content_type="application/json", 
+            gzip_encoded=True, 
+            private=False
+        )
+        
+        # 4. Update DB with pointer only (no raw text!)
+        supabase.table("circulars").update({
+            "ai_indexed": True,
+            "payload_url": payload_url,
+            "chunk_count": len(chunks)
+        }).eq("id", circular_id).execute()
+        
+        # 5. Clean up legacy heavy rows
+        try:
+            supabase.table("circular_chunks").delete().eq("circular_id", circular_id).execute()
+        except Exception:
+            pass
+        
         return len(chunks)
     except Exception as e:
-        log_error("ai_indexing", str(e))
+        log_error("ai_indexing_pointer", str(e))
         return 0
-
-@st.cache_data(ttl=1800)
 def search_uploaded_circulars(question, limit=4):
     try:
         res = supabase.rpc("search_circular_chunks", {"q": question, "limit_count": limit}).execute()
