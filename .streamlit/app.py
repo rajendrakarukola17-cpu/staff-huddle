@@ -588,50 +588,20 @@ def index_circular_for_ai(circular_id, text):
     [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}
     [data-testid="stAppDeployButton"]{display:none !important;}
     .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}
-    
-    /* FORCE SIDEBAR TOGGLE TO BE VISIBLE */
-    [data-testid="collapsedControl"]{
-        visibility:visible !important; 
-        display:block !important;
-        position:fixed !important;
-        left:0 !important;
-        top:50% !important;
-        z-index:999999 !important;
-        background:#1E3A5F !important;
-        color:#fff !important;
-        padding:15px 10px !important;
-        border-radius:0 8px 8px 0 !important;
-        cursor:pointer !important;
-        box-shadow:0 2px 8px rgba(0,0,0,0.3) !important;
-    }
-    [data-testid="stSidebarCollapsedControl"]{
-        visibility:visible !important;
-        display:block !important;
-    }
-    [data-testid="stSidebar"]{
-        visibility:visible !important;
-    }
+    [data-testid="collapsedControl"],[data-testid="stSidebarCollapsedControl"]{visibility:visible !important;}
     </style>
     """, unsafe_allow_html=True)
-        return None, f"{name}: no API key"
-    try:
-        if kind == "gemini":
-            try:
-                from google import genai
-                from google.genai import types
-                c = genai.Client(api_key=key)
-                r = c.models.generate_content(model=model, contents=prompt, config=types.GenerateContentConfig(system_instruction=context, temperature=0.15))
-                return r.text, None
-            except ImportError:
-                import google.generativeai as g2
-                g2.configure(api_key=key)
-                return g2.GenerativeModel(model).generate_content(f"{context}\n\nQuestion: {prompt}").text, None
-        from openai import OpenAI
-        c = OpenAI(api_key=key, base_url=(ep or de).rstrip("/"))
-        r = c.chat.completions.create(model=model, messages=[{"role": "system", "content": context}, {"role": "user", "content": prompt}], temperature=0.15)
-        return r.choices[0].message.content, None
-    except Exception as e:
-        return None, f"{name} error: {e}"
+
+def show_full_chrome():
+    st.markdown("""
+    <style>
+    #MainMenu{visibility:visible !important;}
+    footer{visibility:hidden !important;}
+    header{visibility:visible !important;}
+    [data-testid="stToolbar"]{visibility:visible !important; display:flex !important;}
+    [data-testid="stStatusWidget"]{visibility:visible !important; display:flex !important;}
+    </style>
+    """, unsafe_allow_html=True)
 
 def ai_call(prompt, context):
     primary = get_setting("ai_provider", "gemini")
