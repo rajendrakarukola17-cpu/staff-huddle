@@ -268,6 +268,12 @@ def clear_session_token(token):
     except Exception:
         pass
 
+# Initialize cookie manager on first run
+try:
+    cookie_manager.get()  # Force initialization
+except Exception:
+    pass
+    
 def try_auto_login():
     if st.session_state.logged_in:
         return
