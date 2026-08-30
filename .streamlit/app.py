@@ -273,10 +273,21 @@ def do_login(u, remember=True):
     st.session_state.user = u
     if remember:
         token = create_session_token(u["email"])
+        # Set cookie using extra-streamlit-components (reliable on Streamlit Cloud)
         try:
-            cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600, secure=True, same_site="Lax")
-        except TypeError:
-            cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600)
+            cookie_manager.set(
+                cookie=COOKIE_NAME,
+                val=token,
+                max_age=SESSION_DAYS * 24 * 3600,
+                path="/",
+            )
+        except Exception as e:
+            log_error("cookie_set", str(e))
+        # Also try native Streamlit cookies as backup
+        try:
+            st.context.cookies[COOKIE_NAME] = token
+        except Exception:
+            pass
     st.rerun()
 
 def otp_send(identifier, channel):
