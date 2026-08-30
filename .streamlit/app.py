@@ -637,7 +637,40 @@ def ai_call(prompt, context):
     return None, last or "No AI provider configured."
 
 def hide_cloud_chrome():
-    st.markdown("""<style>#MainMenu{visibility:hidden !important;}footer{visibility:hidden !important;}header{visibility:hidden !important; height:0 !important;}[data-testid="stToolbar"]{visibility:hidden !important; display:none !important;}[data-testid="stDecoration"]{visibility:hidden !important;}[data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}[data-testid="stAppDeployButton"]{display:none !important;}.viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}[data-testid="collapsedControl"],[data-testid="stSidebarCollapsedControl"]{visibility:visible !important;}</style>""", unsafe_allow_html=True)
+    st.markdown("""
+    <style>
+    #MainMenu{visibility:hidden !important;}
+    footer{visibility:hidden !important;}
+    header{visibility:hidden !important; height:0 !important;}
+    [data-testid="stToolbar"]{visibility:hidden !important; display:none !important;}
+    [data-testid="stDecoration"]{visibility:hidden !important;}
+    [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}
+    [data-testid="stAppDeployButton"]{display:none !important;}
+    .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}
+    
+    /* ENSURE SIDEBAR TOGGLE IS ALWAYS VISIBLE */
+    [data-testid="collapsedControl"]{
+        visibility:visible !important; 
+        display:block !important;
+        position:fixed !important;
+        left:0 !important;
+        top:50% !important;
+        z-index:999999 !important;
+        background:#1E3A5F !important;
+        color:#fff !important;
+        padding:10px !important;
+        border-radius:0 8px 8px 0 !important;
+        cursor:pointer !important;
+    }
+    [data-testid="stSidebarCollapsedControl"]{
+        visibility:visible !important;
+        display:block !important;
+    }
+    [data-testid="stSidebar"]{
+        visibility:visible !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 def show_full_chrome():
     st.markdown("""<style>#MainMenu{visibility:visible !important;}footer{visibility:hidden !important;}header{visibility:visible !important;}[data-testid="stToolbar"]{visibility:visible !important; display:flex !important;}[data-testid="stStatusWidget"]{visibility:visible !important; display:flex !important;}</style>""", unsafe_allow_html=True)
