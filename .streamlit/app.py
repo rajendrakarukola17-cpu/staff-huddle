@@ -990,26 +990,44 @@ def show_tapal(user):
             
             attachment = st.file_uploader("Attach document (optional)", type=["pdf", "doc", "docx", "jpg", "png"])
             
-            if st.form_submit_button("💾 Save Draft Locally", use_container_width=True):
-                st.session_state[draft_key] = {"from_to": from_to, "subject": subject, "file_ref": file_ref, "remarks": remarks}
-                st.success("Draft saved locally in browser session!")
-            
-            if st.form_submit_button("✅ Save Entry", type="primary", use_container_width=True):
-                if not from_to.strip() or not subject.strip():
-                    st.warning("From/To and Subject are required.")
-                else:
-                    attachment_url = None
-                    if attachment:
-                        file_bytes = attachment.read()
-                        safe_name = f"tapal_{datetime.utcnow().timestamp()}_{attachment.name}"
-                        attachment_url = upload_to_r2(file_bytes, safe_name, content_type=attachment.type, private=False)
-                    
-                    supabase.table("tapal_log").insert({
-                        "direction": direction, "tapal_date": tdate.isoformat(), "from_to": from_to.strip(),
-                        "subject": subject.strip(), "file_ref": file_ref.strip() or None, "remarks": remarks.strip() or None,
-                        "attachment_url": attachment_url, "entered_by": user["email"], "entered_at": datetime.utcnow().isoformat()
-                    }).execute()
-                    
+                    if st.form_submit_button("Save Entry", type="primary", use_container_width=True):
+             if not from_to.strip() or not subject.strip():
+                 st.warning("From/To and Subject are required.")
+             else:
+                 try:
+                     attachment_url = None
+                     if attachment:
+                         file_bytes = attachment.read()
+                         safe_name = f"tapal_{datetime.utcnow().timestamp()}_{attachment.name}"
+                         attachment_url = upload_to_r2(file_bytes, safe_name, content_type=attachment.type, private=False)
+                     
+                     # Insert into database
+                     supabase.table("tapal_log").insert({
+                         "direction": direction, 
+                         "tapal_date": tdate.isoformat(),
+                         "from_to": from_to.strip(), 
+                         "subject": subject.strip(),
+                         "file_ref": file_ref.strip() or None, 
+                         "remarks": remarks.strip() or None,
+                         "attachment_url": attachment_url, 
+                         "entered_by": user["email"],
+                         "entered_at": datetime.utcnow().isoformat()
+                     }).execute()
+                     
+                     # Clear draft safely (works even if local_storage fails)
+                     if draft_key in st.session_state:
+                         del st.session_state[draft_key]
+                     try:
+                         local_storage.remove(draft_key)
+                     except Exception:
+                         pass
+                         
+                     fetch_tapal.clear()
+                     st.success("Entry saved successfully!")
+                     st.rerun()
+                     
+                 except Exception as e:
+                     st.error(f"Database save failed. Please ensure you ran the SQL update in Step 1. Details: {str(e)}")
                     # Clear draft after successful save
                     if draft_key in st.session_state: del st.session_state[draft_key]
                     fetch_tapal.clear()
