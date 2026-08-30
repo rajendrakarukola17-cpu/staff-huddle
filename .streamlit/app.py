@@ -577,27 +577,42 @@ def index_circular_for_ai(circular_id, text):
         chunks = chunk_text(text)
         if not chunks:
             supabase.table("circulars").update({"ai_indexed": False}).eq("id", circular_id).execute()
-            return 0
-        rows = [{"circular_id": circular_id, "chunk_no": i, "content": ch} for i, ch in enumerate(chunks)]
-        supabase.table("circular_chunks").insert(rows).execute()
-        supabase.table("circulars").update({"ai_indexed": True}).eq("id", circular_id).execute()
-        return len(chunks)
-    except Exception as e:
-        log_error("ai_indexing", str(e))
-        return 0
-
-@st.cache_data(ttl=1800)
-def search_uploaded_circulars(question, limit=4):
-    try:
-        res = supabase.rpc("search_circular_chunks", {"q": question, "limit_count": limit}).execute()
-        return res.data or []
-    except Exception as e:
-        log_error("ai_search", str(e))
-        return []
-
-def _call_one(p, key, model, ep, prompt, context):
-    name, kind, dm, de = PROVIDERS.get(p, PROVIDERS["gemini"])
-    if not key:
+           def hide_cloud_chrome():
+    st.markdown("""
+    <style>
+    #MainMenu{visibility:hidden !important;}
+    footer{visibility:hidden !important;}
+    header{visibility:hidden !important; height:0 !important;}
+    [data-testid="stToolbar"]{visibility:hidden !important; display:none !important;}
+    [data-testid="stDecoration"]{visibility:hidden !important;}
+    [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}
+    [data-testid="stAppDeployButton"]{display:none !important;}
+    .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}
+    
+    /* FORCE SIDEBAR TOGGLE TO BE VISIBLE */
+    [data-testid="collapsedControl"]{
+        visibility:visible !important; 
+        display:block !important;
+        position:fixed !important;
+        left:0 !important;
+        top:50% !important;
+        z-index:999999 !important;
+        background:#1E3A5F !important;
+        color:#fff !important;
+        padding:15px 10px !important;
+        border-radius:0 8px 8px 0 !important;
+        cursor:pointer !important;
+        box-shadow:0 2px 8px rgba(0,0,0,0.3) !important;
+    }
+    [data-testid="stSidebarCollapsedControl"]{
+        visibility:visible !important;
+        display:block !important;
+    }
+    [data-testid="stSidebar"]{
+        visibility:visible !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
         return None, f"{name}: no API key"
     try:
         if kind == "gemini":
