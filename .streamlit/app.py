@@ -1,4 +1,3 @@
-from jose import jwt
 import gzip
 import html
 import io
@@ -17,7 +16,13 @@ import bcrypt
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
-import extra_streamlit_components as stx
+from streamlit_cookies_controller import CookieController
+
+try:
+    from jose import jwt
+    JOSE_AVAILABLE = True
+except ImportError:
+    JOSE_AVAILABLE = False
 
 try:
     import cv2
@@ -152,16 +157,15 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 
 def get_user_supabase_client(user_email):
-    """Create user-specific Supabase client with forged JWT for RLS enforcement"""
+    if not JOSE_AVAILABLE:
+        return supabase
     try:
         jwt_secret = st.secrets.get("SUPABASE_JWT_SECRET")
         if not jwt_secret:
             return supabase
-        
         user = get_user(user_email)
         if not user:
             return supabase
-        
         now = int(datetime.now(timezone.utc).timestamp())
         payload = {
             "sub": str(user["id"]),
@@ -172,9 +176,7 @@ def get_user_supabase_client(user_email):
             "app_metadata": {"provider": "email"},
             "user_metadata": {}
         }
-        
         token = jwt.encode(payload, jwt_secret, algorithm="HS256")
-        
         return create_client(
             st.secrets["SUPABASE_URL"],
             st.secrets["SUPABASE_KEY"],
@@ -184,7 +186,7 @@ def get_user_supabase_client(user_email):
         log_error("rls_jwt", str(e))
         return supabase
 
-cookie_manager = stx.CookieManager()
+cookies = CookieController()
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -241,39 +243,24 @@ def get_user_from_token(token):
 
 def read_session_cookie():
     try:
-        # Try Streamlit Cloud native cookies first
-        token = st.context.cookies.get(COOKIE_NAME)
-        if token:
-            return token
+        return st.context.cookies.get(COOKIE_NAME)
     except Exception:
-        pass
-    # Fallback to extra-streamlit-components
-    try:
-        return cookie_manager.get(cookie=COOKIE_NAME)
-    except Exception:
-        return None
+        try:
+            return cookies.get(COOKIE_NAME)
+        except Exception:
+            return None
+
 def clear_session_token(token):
     if token:
         try:
             supabase.table("sessions").delete().eq("token_hash", _hash_token(token)).execute()
         except Exception:
             pass
-    # Clear both cookie systems
     try:
-        cookie_manager.delete(COOKIE_NAME)
-    except Exception:
-        pass
-    try:
-        st.context.cookies[COOKIE_NAME] = ""
+        cookies.remove(COOKIE_NAME)
     except Exception:
         pass
 
-# Initialize cookie manager on first run
-try:
-    cookie_manager.get()  # Force initialization
-except Exception:
-    pass
-    
 def try_auto_login():
     if st.session_state.logged_in:
         return
@@ -287,21 +274,10 @@ def do_login(u, remember=True):
     st.session_state.user = u
     if remember:
         token = create_session_token(u["email"])
-        # Set cookie using extra-streamlit-components (reliable on Streamlit Cloud)
         try:
-            cookie_manager.set(
-                cookie=COOKIE_NAME,
-                val=token,
-                max_age=SESSION_DAYS * 24 * 3600,
-                path="/",
-            )
-        except Exception as e:
-            log_error("cookie_set", str(e))
-        # Also try native Streamlit cookies as backup
-        try:
-            st.context.cookies[COOKIE_NAME] = token
-        except Exception:
-            pass
+            cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600, secure=True, same_site="Lax")
+        except TypeError:
+            cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600)
     st.rerun()
 
 def otp_send(identifier, channel):
@@ -469,11 +445,8 @@ def get_ai_usage_today(email):
 def log_ai_query(user_email, prompt, response, cited_docs):
     try:
         supabase.table("ai_query_logs").insert({
-            "user_email": user_email,
-            "prompt": prompt[:5000],
-            "response": response[:10000],
-            "cited_documents": json.dumps(cited_docs),
-            "queried_at": datetime.utcnow().isoformat()
+            "user_email": user_email, "prompt": prompt[:5000], "response": response[:10000],
+            "cited_documents": json.dumps(cited_docs), "queried_at": datetime.utcnow().isoformat()
         }).execute()
     except Exception as e:
         log_error("ai_audit_log", str(e))
@@ -597,93 +570,29 @@ def optimize_pdf(file_bytes):
 def chunk_text(text, size=1200):
     text = text.strip()
     return [text[i:i+size].strip() for i in range(0, len(text), size) if text[i:i+size].strip()] if text else []
+
 def index_circular_for_ai(circular_id, text):
-    """Pointer & Payload: Compress text to R2, store only URL in DB."""
     try:
+        supabase.table("circular_chunks").delete().eq("circular_id", circular_id).execute()
         chunks = chunk_text(text)
         if not chunks:
             supabase.table("circulars").update({"ai_indexed": False}).eq("id", circular_id).execute()
             return 0
-        
-        # 1. Create payload JSON
-        payload = {"circular_id": circular_id, "chunks": chunks}
-        payload_json = json.dumps(payload).encode('utf-8')
-        
-        # 2. Compress heavily
-        payload_gz = gzip.compress(payload_json, compresslevel=9)
-        
-        # 3. Upload to R2
-        object_name = f"ai_payloads/circular_{circular_id}_chunks.json.gz"
-        payload_url = upload_to_r2(
-            payload_gz, 
-            object_name, 
-            content_type="application/json", 
-            gzip_encoded=True, 
-            private=False
-        )
-        
-        # 4. Update DB with pointer only (no raw text!)
-        supabase.table("circulars").update({
-            "ai_indexed": True,
-            "payload_url": payload_url,
-            "chunk_count": len(chunks)
-        }).eq("id", circular_id).execute()
-        
-        # 5. Clean up legacy heavy rows
-        try:
-            supabase.table("circular_chunks").delete().eq("circular_id", circular_id).execute()
-        except Exception:
-            pass
-        
+        rows = [{"circular_id": circular_id, "chunk_no": i, "content": ch} for i, ch in enumerate(chunks)]
+        supabase.table("circular_chunks").insert(rows).execute()
+        supabase.table("circulars").update({"ai_indexed": True}).eq("id", circular_id).execute()
         return len(chunks)
     except Exception as e:
-        log_error("ai_indexing_pointer", str(e))
+        log_error("ai_indexing", str(e))
         return 0
+
 @st.cache_data(ttl=1800)
 def search_uploaded_circulars(question, limit=4):
-    """Fetch lightweight pointers from DB, download compressed payload from R2."""
     try:
-        # 1. Get all indexed circulars with payload URLs
-        res = supabase.table("circulars").select(
-            "id, ref_id, title, payload_url"
-        ).eq("ai_indexed", True).execute()
-        if not res.data:
-            return []
-        
-        results = []
-        q_lower = question.lower()
-        
-        # 2. Search payloads locally
-        for circ in res.data:
-            if not circ.get("payload_url"):
-                continue
-            
-            try:
-                gz_data = fetch_and_decompress(circ["payload_url"])
-                payload = json.loads(gz_data.decode('utf-8'))
-                
-                score = 0
-                matched_chunks = []
-                for chunk in payload.get("chunks", []):
-                    if q_lower in chunk.lower():
-                        score += 1
-                        matched_chunks.append(chunk)
-                
-                if score > 0:
-                    results.append({
-                        "ref_id": circ["ref_id"],
-                        "title": circ["title"],
-                        "content": " ... ".join(matched_chunks[:2]),
-                        "score": score
-                    })
-            except Exception as e:
-                log_error("payload_fetch", f"ID {circ['id']}: {e}")
-                continue
-        
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:limit]
+        res = supabase.rpc("search_circular_chunks", {"q": question, "limit_count": limit}).execute()
+        return res.data or []
     except Exception as e:
-        log_error("ai_search_pointer", str(e))
+        log_error("ai_search", str(e))
         return []
 
 def _call_one(p, key, model, ep, prompt, context):
