@@ -16,26 +16,30 @@ from email.message import EmailMessage
 import bcrypt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import create_client, Client
 from streamlit_cookies_controller import CookieController
 
-try:
-    from jose import jwt
-    JOSE_AVAILABLE = True
-except ImportError:
-    JOSE_AVAILABLE = False
+# --- GRACEFUL DEPENDENCY LOADING ---
+try: from jose import jwt; JOSE_AVAILABLE = True
+except ImportError: JOSE_AVAILABLE = False
 
 try:
     import cv2
     import pytesseract
     from PIL import Image, ImageEnhance, ImageOps
     OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
+except ImportError: OCR_AVAILABLE = False
 
-st.set_page_config(page_title="GovDocs AI — Government Workspace", page_icon="🏛️", layout="wide", initial_sidebar_state="expanded")
+try: from upstash_redis import Redis; REDIS_AVAILABLE = True
+except ImportError: REDIS_AVAILABLE = False
 
-# --- UPDATED CSS (DEEP SLATE NAVY PALETTE) ---
+try: from imagekitio import ImageKit; IMAGEKIT_AVAILABLE = True
+except ImportError: IMAGEKIT_AVAILABLE = False
+
+st.set_page_config(page_title="RTA Digital Workspace", page_icon="🏛️", layout="wide", initial_sidebar_state="expanded")
+
+# --- UI THEME (RTA Deep Slate Navy) ---
 CUSTOM_CSS = r"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -99,6 +103,18 @@ hr{border-color:var(--border) !important;}
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
+components.html("""
+<script>
+document.addEventListener('contextmenu', event => event.preventDefault());
+document.addEventListener('keyup', (e) => {
+    if (e.key == 'PrintScreen') {
+        document.body.style.filter = 'blur(10px)';
+        document.body.innerHTML = '<h1 style="color:red; text-align:center; margin-top:20%;">SECURITY VIOLATION LOGGED</h1>';
+    }
+});
+</script>
+""", height=0, width=0)
+
 DAILY_AI_LIMIT = 20
 MAX_UPLOAD_MB = 20
 OCR_MAX_PAGES = 40
@@ -117,37 +133,27 @@ PROVIDERS = {
     "custom": ("Custom endpoint", "openai", "", ""),
 }
 
-# --- CORE UTILITIES ---
-def now_utc():
-    return datetime.now(timezone.utc)
-
-def page_header(title, subtitle=""):
-    st.markdown(f'<div class="page-header"><h1>{title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
-
+# --- HELPER FUNCTIONS ---
+def page_header(title, subtitle=""): st.markdown(f'<div class="page-header"><h1>{title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
 def greeting():
     h = datetime.now().hour
     return "Good morning" if h < 12 else ("Good afternoon" if h < 17 else "Good evening")
-
 def tier_badge(tier):
     cls = {"Basic": "badge-basic", "Staff": "badge-basic", "Pro": "badge-pro", "Max": "badge-max", "Admin": "badge-max"}.get(tier, "badge-basic")
     return f'<span class="badge {cls}">{tier}</span>'
-
 def safe_str(v): return "" if v is None else str(v)
 def is_safe_url(u): return bool(re.match(r"^https?://", (u or "").strip(), re.IGNORECASE))
 def esc(v): return html.escape(safe_str(v))
 def email_ok(x): return bool(re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', x or ''))
 def phone_ok(x): return 10 <= len(re.sub(r'\D', '', x or '')) <= 15
 def secret(k, d=""):
-    try:
-        return st.secrets.get(k, d) or os.getenv(k, d)
-    except Exception:
-        return os.getenv(k, d)
+    try: return st.secrets.get(k, d) or os.getenv(k, d)
+    except Exception: return os.getenv(k, d)
+def now_utc(): return datetime.now(timezone.utc)
 
-# --- DATABASE / RLS ---
+# --- DATABASE & RLS ---
 @st.cache_resource
-def get_supabase() -> Client:
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-
+def get_supabase() -> Client: return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 supabase = get_supabase()
 
 def get_user_supabase_client(user_email):
@@ -155,156 +161,104 @@ def get_user_supabase_client(user_email):
     try:
         jwt_secret = st.secrets.get("SUPABASE_JWT_SECRET")
         if not jwt_secret: return supabase
-        
-        # We need the user tier and department for RLS
-        user_res = supabase.table("users").select("*").eq("email", user_email).execute()
-        if not user_res.data: return supabase
-        user = user_res.data[0]
-        
+        user = get_user(user_email)
+        if not user: return supabase
         now = int(now_utc().timestamp())
         payload = {
-            "sub": str(user["id"]),
-            "email": user_email,
-            "role": "authenticated",
-            "iat": now,
-            "exp": now + 3600,
+            "sub": str(user["id"]), "email": user_email, "role": "authenticated", "iat": now, "exp": now + 3600,
             "app_metadata": {"provider": "email"},
-            "user_metadata": {
-                "tier": user.get("tier", "Basic"),
-                "department": user.get("department", "")
-            }
+            "user_metadata": {"tier": user.get("tier", "Basic"), "department": user.get("department", "")}
         }
         token = jwt.encode(payload, jwt_secret, algorithm="HS256")
-        return create_client(
-            st.secrets["SUPABASE_URL"],
-            st.secrets["SUPABASE_KEY"],
-            options={"headers": {"Authorization": f"Bearer {token}", "apikey": st.secrets["SUPABASE_KEY"]}}
-        )
+        return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"], options={"headers": {"Authorization": f"Bearer {token}", "apikey": st.secrets["SUPABASE_KEY"]}})
     except Exception as e:
         log_error("rls_jwt", str(e))
         return supabase
 
 cookies = CookieController()
-
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user = None
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "processing_status" not in st.session_state:
-    st.session_state.processing_status = None
+if "messages" not in st.session_state: st.session_state.messages = []
+if "processing_status" not in st.session_state: st.session_state.processing_status = None
 
 # --- AUTH LOGIC ---
-def hash_password(p):
-    return bcrypt.hashpw(p.encode(), bcrypt.gensalt(rounds=10)).decode()
-
+def hash_password(p): return bcrypt.hashpw(p.encode(), bcrypt.gensalt(rounds=10)).decode()
 def check_password(p, h):
-    try:
-        return bcrypt.checkpw(p.encode(), h.encode())
-    except Exception:
-        return False
-
+    try: return bcrypt.checkpw(p.encode(), h.encode())
+    except Exception: return False
 def get_user(email):
     res = supabase.table("users").select("*").eq("email", email).execute()
     return res.data[0] if res.data else None
-
 def create_pending_request(name, email, note):
     supabase.table("pending_requests").insert({"name": name, "email": email, "note": note, "requested_at": now_utc().isoformat(), "status": "pending"}).execute()
-
 def has_access(user_tier, required_tier):
     levels = {"Staff": 1, "Basic": 1, "Pro": 2, "Max": 3, "Admin": 4}
     return levels.get(user_tier, 0) >= levels.get(required_tier, 0)
-
 def _hash_token(token):
     import hashlib
     return hashlib.sha256(token.encode()).hexdigest()
-
 def create_session_token(email):
     token = secrets.token_urlsafe(32)
     supabase.table("sessions").insert({"token_hash": _hash_token(token), "email": email, "expires_at": (now_utc() + timedelta(days=SESSION_DAYS)).isoformat()}).execute()
     return token
-
 def get_user_from_token(token):
     if not token: return None
     res = supabase.table("sessions").select("*").eq("token_hash", _hash_token(token)).execute()
     if not res.data: return None
     s = res.data[0]
-    
-    expires_at = datetime.fromisoformat(str(s["expires_at"]).replace("Z", "+00:00"))
-    if expires_at < now_utc():
+    if datetime.fromisoformat(s["expires_at"].replace("Z", "+00:00")) < now_utc():
         supabase.table("sessions").delete().eq("token_hash", _hash_token(token)).execute()
         return None
-        
     user = get_user(s["email"])
     if user and user.get("active", True) is False:
         supabase.table("sessions").delete().eq("token_hash", _hash_token(token)).execute()
         return None
     return user
-
 def read_session_cookie():
-    try:
-        return st.context.cookies.get(COOKIE_NAME)
+    try: return st.context.cookies.get(COOKIE_NAME)
     except Exception:
-        try:
-            return cookies.get(COOKIE_NAME)
-        except Exception:
-            return None
-
+        try: return cookies.get(COOKIE_NAME)
+        except Exception: return None
 def clear_session_token(token):
     if token:
         try: supabase.table("sessions").delete().eq("token_hash", _hash_token(token)).execute()
         except Exception: pass
     try: cookies.remove(COOKIE_NAME)
     except Exception: pass
-
 def try_auto_login():
     if st.session_state.logged_in: return
     user = get_user_from_token(read_session_cookie())
     if user:
         st.session_state.logged_in = True
         st.session_state.user = user
-
 def do_login(u, remember=True):
     st.session_state.logged_in = True
     st.session_state.user = u
     if remember:
         token = create_session_token(u["email"])
-        try:
-            cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600, secure=True, same_site="Lax")
-        except TypeError:
-            cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600)
+        try: cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600, secure=True, same_site="Lax")
+        except TypeError: cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600)
     st.rerun()
 
 def otp_send(identifier, channel):
     recent = supabase.table("otp_verifications").select("created_at").eq("identifier", identifier).order("created_at", desc=True).limit(1).execute()
     if recent.data:
         last = recent.data[0].get("created_at")
-        try:
-            last_dt = datetime.fromisoformat(last.replace("Z", "+00:00")) if last else None
-        except Exception:
-            last_dt = None
+        try: last_dt = datetime.fromisoformat(last.replace("Z", "+00:00")) if last else None
+        except Exception: last_dt = None
         if last_dt:
             elapsed = (now_utc() - (last_dt if last_dt.tzinfo else last_dt.replace(tzinfo=timezone.utc))).total_seconds()
-            if elapsed < OTP_COOLDOWN_SECONDS:
-                return False, f"Please wait {int(OTP_COOLDOWN_SECONDS - elapsed)}s before requesting another OTP."
-                
+            if elapsed < OTP_COOLDOWN_SECONDS: return False, f"Please wait {int(OTP_COOLDOWN_SECONDS - elapsed)}s before requesting another OTP."
     today_count = supabase.table("otp_verifications").select("id", count="exact", head=True).eq("identifier", identifier).gte("created_at", date.today().isoformat()).execute().count or 0
-    if today_count >= OTP_DAILY_MAX:
-        return False, "Daily OTP limit reached for this address. Try again tomorrow or contact admin."
-        
+    if today_count >= OTP_DAILY_MAX: return False, "Daily OTP limit reached for this address. Try again tomorrow or contact admin."
     code = f"{secrets.randbelow(1000000):06d}"
-    supabase.table("otp_verifications").insert({
-        "identifier": identifier, "channel": channel, "purpose": "signup",
-        "code_hash": hash_password(code), "created_at": now_utc().isoformat(),
-        "expires_at": (now_utc() + timedelta(minutes=OTP_MIN)).isoformat(),
-    }).execute()
-    
+    supabase.table("otp_verifications").insert({"identifier": identifier, "channel": channel, "purpose": "signup", "code_hash": hash_password(code), "created_at": now_utc().isoformat(), "expires_at": (now_utc() + timedelta(minutes=OTP_MIN)).isoformat()}).execute()
     if channel == "email":
         host, port = secret("SMTP_HOST"), int(secret("SMTP_PORT", "587"))
         usr, pw = secret("SMTP_USERNAME"), secret("SMTP_PASSWORD")
         sender = secret("SMTP_FROM") or usr
-        if not all([host, usr, pw, sender]):
-            return False, "Email OTP is not configured yet. Use Request Access or ask admin to add SMTP secrets."
+        if not all([host, usr, pw, sender]): return False, "Email OTP is not configured yet. Use Request Access."
         try:
             m = EmailMessage()
             m["Subject"] = "GovDocs AI verification code"
@@ -312,80 +266,83 @@ def otp_send(identifier, channel):
             m["To"] = identifier
             m.set_content(f"Your verification code is {code}. It expires in {OTP_MIN} minutes.")
             with smtplib.SMTP(host, port, timeout=20) as s:
-                s.starttls()
-                s.login(usr, pw)
-                s.send_message(m)
+                s.starttls(); s.login(usr, pw); s.send_message(m)
             return True, ""
         except Exception as e:
             log_error("smtp_otp", repr(e))
             return False, str(e)
-            
-    sid, tok, frm = secret("TWILIO_ACCOUNT_SID"), secret("TWILIO_AUTH_TOKEN"), secret("TWILIO_FROM_NUMBER")
-    if not all([sid, tok, frm]):
-        return False, "SMS OTP is not configured yet. Use Email OTP or the Request Access tab."
-    try:
-        from twilio.rest import Client
-        Client(sid, tok).messages.create(body=f"GovDocs AI OTP: {code}. Valid {OTP_MIN} minutes.", from_=frm, to=identifier)
-        return True, ""
-    except Exception as e:
-        log_error("sms_otp", repr(e))
-        return False, str(e)
+    return False, "SMS not configured."
 
 def otp_verify(identifier, channel, code):
     try:
         r = supabase.table("otp_verifications").select("*").eq("identifier", identifier).eq("channel", channel).eq("purpose", "signup").eq("verified", False).order("created_at", desc=True).limit(1).execute()
         if not r.data: return False, "Request a new OTP first."
         x = r.data[0]
-        if datetime.fromisoformat(str(x["expires_at"]).replace("Z", "+00:00")) < now_utc():
-            return False, "OTP expired. Request a new one."
+        if datetime.fromisoformat(str(x["expires_at"]).replace("Z", "+00:00")) < now_utc(): return False, "OTP expired."
         new_attempts = supabase.rpc("increment_otp_attempts", {"row_id": str(x["id"])}).execute().data
-        if new_attempts is None or new_attempts > 5:
-            return False, "Too many attempts. Request a new OTP."
-        if not check_password(code.strip(), x["code_hash"]):
-            return False, "Incorrect OTP."
+        if new_attempts is None or new_attempts > 5: return False, "Too many attempts. Request a new OTP."
+        if not check_password(code.strip(), x["code_hash"]): return False, "Incorrect OTP."
         supabase.table("otp_verifications").update({"verified": True}).eq("id", x["id"]).execute()
         return True, ""
     except Exception as e:
         log_error("otp_verify", repr(e))
         return False, "OTP verification failed."
 
-# --- DATA FETCHING (USING RLS) ---
-@st.cache_data(ttl=30)
-def fetch_circulars(_client):
-    return _client.table("circulars").select("*").execute().data or []
+# --- UPSTASH REDIS L2 CACHE & IMAGEKIT ---
+def get_redis():
+    if not REDIS_AVAILABLE or not secret("UPSTASH_REDIS_REST_URL"): return None
+    try: return Redis(url=secret("UPSTASH_REDIS_REST_URL"), token=secret("UPSTASH_REDIS_REST_TOKEN"))
+    except Exception: return None
 
-@st.cache_data(ttl=30)
-def fetch_templates(_client):
-    return _client.table("templates").select("*").execute().data or []
+def get_imagekit():
+    if not IMAGEKIT_AVAILABLE or not secret("IMAGEKIT_PRIVATE_KEY"): return None
+    try: return ImageKit(private_key=secret("IMAGEKIT_PRIVATE_KEY"), public_key=secret("IMAGEKIT_PUBLIC_KEY"), url_endpoint=secret("IMAGEKIT_URL_ENDPOINT"))
+    except Exception: return None
 
-@st.cache_data(ttl=30)
-def fetch_letter_templates(_client):
-    return _client.table("letter_templates").select("*").execute().data or []
+def upload_social_image(file_bytes, file_name):
+    ik = get_imagekit()
+    if not ik: raise ValueError("ImageKit is not configured.")
+    if len(file_bytes) > 5 * 1024 * 1024: raise ValueError("File exceeds 5MB limit.")
+    res = ik.files.upload(file=file_bytes, file_name=file_name, folder="/govconnect_feed/")
+    return f"{res.url}?tr=w-400,q-auto,f-auto"
 
-@st.cache_data(ttl=30)
-def fetch_tapal(_client):
-    return _client.table("tapal_log").select("*").order("tapal_date", desc=True).execute().data or []
-
-@st.cache_data(ttl=30)
+# --- CACHED DATA FETCHING ---
+@st.cache_data(ttl=3600)
 def fetch_directory(_client):
-    return _client.table("users").select("name, email, department, tier").execute().data or []
+    r = get_redis()
+    if r:
+        cached = r.get("govdocs_directory")
+        if cached: return cached if isinstance(cached, list) else json.loads(cached)
+    data = _client.table("users").select("name, email, department, tier").execute().data or []
+    if data and r: r.set("govdocs_directory", json.dumps(data), ex=86400)
+    return data
+
+@st.cache_data(ttl=3600)
+def fetch_letter_templates(_client):
+    r = get_redis()
+    if r:
+        cached = r.get("govdocs_templates")
+        if cached: return cached if isinstance(cached, list) else json.loads(cached)
+    data = _client.table("letter_templates").select("*").execute().data or []
+    if data and r: r.set("govdocs_templates", json.dumps(data), ex=86400)
+    return data
+
+@st.cache_data(ttl=30)
+def fetch_circulars(_client): return _client.table("circulars").select("*").execute().data or []
+@st.cache_data(ttl=30)
+def fetch_tapal(_client): return _client.table("tapal_log").select("*").order("tapal_date", desc=True).execute().data or []
+@st.cache_data(ttl=30)
+def fetch_social_posts(_client): return _client.table("social_posts").select("*, users(name)").order("created_at", desc=True).limit(20).execute().data or []
 
 @st.cache_data(ttl=30)
 def _fetch_all_settings():
-    try:
-        res = supabase.table("app_settings").select("key,value").execute()
-        return {r["key"]: r["value"] for r in (res.data or [])}
-    except Exception:
-        return {}
+    try: return {r["key"]: r["value"] for r in (supabase.table("app_settings").select("key,value").execute().data or [])}
+    except Exception: return {}
 
-def get_setting(key, default=""):
-    return _fetch_all_settings().get(key, default)
-
+def get_setting(key, default=""): return _fetch_all_settings().get(key, default)
 def set_setting(key, value):
-    if supabase.table("app_settings").select("key").eq("key", key).execute().data:
-        supabase.table("app_settings").update({"value": value}).eq("key", key).execute()
-    else:
-        supabase.table("app_settings").insert({"key": key, "value": value}).execute()
+    if supabase.table("app_settings").select("key").eq("key", key).execute().data: supabase.table("app_settings").update({"value": value}).eq("key", key).execute()
+    else: supabase.table("app_settings").insert({"key": key, "value": value}).execute()
     _fetch_all_settings.clear()
 
 def _fernet():
@@ -399,7 +356,6 @@ def encrypt_secret(raw):
     f = _fernet()
     if not f or not raw: return raw
     return "enc:" + f.encrypt(raw.encode()).decode()
-
 def decrypt_secret(stored):
     if not stored or not str(stored).startswith("enc:"): return stored
     f = _fernet()
@@ -409,7 +365,6 @@ def decrypt_secret(stored):
 
 DEFAULT_DEPARTMENTS = "Establishment;Accounts;Enforcement;Licensing;Registration;Correspondence / Tapal"
 DEFAULT_OFFICES = "DTC Office, Visakhapatnam;RTA Office, Visakhapatnam"
-
 def get_org_list(setting_key, default_csv):
     raw = get_setting(setting_key, default_csv)
     items = [x.strip() for x in raw.split(";") if x.strip()]
@@ -418,30 +373,21 @@ def get_org_list(setting_key, default_csv):
 def log_error(area, message):
     try: supabase.table("error_log").insert({"area": area, "message": str(message)[:2000], "occurred_at": now_utc().isoformat()}).execute()
     except Exception: pass
-
 def log_ai_usage(email):
     res = supabase.rpc("increment_ai_usage", {"p_email": email, "p_day": date.today().isoformat()}).execute()
     return res.data if res.data is not None else 1
-
 def get_ai_usage_today(email):
     res = supabase.table("ai_usage").select("*").eq("email", email).eq("day", date.today().isoformat()).execute()
     return res.data[0]["count"] if res.data else 0
-
 def log_ai_query(user_email, prompt, response, cited_docs):
-    try:
-        supabase.table("ai_query_logs").insert({
-            "user_email": user_email, "prompt": prompt[:5000], "response": response[:10000],
-            "cited_documents": json.dumps(cited_docs), "queried_at": now_utc().isoformat()
-        }).execute()
-    except Exception as e:
-        log_error("ai_audit_log", str(e))
+    try: supabase.table("ai_query_logs").insert({"user_email": user_email, "prompt": prompt[:5000], "response": response[:10000], "cited_documents": json.dumps(cited_docs), "queried_at": now_utc().isoformat()}).execute()
+    except Exception as e: log_error("ai_audit_log", str(e))
 
-# --- R2 & PDF PROCESSING ---
+# --- R2 CLIENT ---
 @st.cache_resource
 def get_r2_client():
     import boto3
-    return boto3.client("s3", endpoint_url=f"https://{st.secrets['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
-                        aws_access_key_id=st.secrets["R2_ACCESS_KEY_ID"], aws_secret_access_key=st.secrets["R2_SECRET_ACCESS_KEY"], region_name="auto")
+    return boto3.client("s3", endpoint_url=f"https://{st.secrets['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com", aws_access_key_id=st.secrets["R2_ACCESS_KEY_ID"], aws_secret_access_key=st.secrets["R2_SECRET_ACCESS_KEY"], region_name="auto")
 
 def upload_to_r2(file_bytes, object_name, content_type="application/pdf", gzip_encoded=False, private=False):
     s3 = get_r2_client()
@@ -460,35 +406,21 @@ def content_hash(file_bytes):
     import hashlib
     return hashlib.sha256(file_bytes).hexdigest()[:10]
 
-# --- FIXED CHUNKING WITH TEXTWRAP ---
-def chunk_text(text, size=1200):
-    if not text: return []
-    return textwrap.wrap(text.strip(), width=size, break_long_words=False, break_on_hyphens=False)
-
-def process_pdf_background(file_bytes, safe_name, dd, rn, cat, user_email, ref_id, dt, tt, sup_):
+def process_pdf_background(file_bytes, safe_name, dd, rn, cat, user_email, ref_id, dt, tt, tier, sup_):
     try:
         text, ocr = extract_pdf_text(file_bytes)
-        compressed = compress_for_r2(file_bytes)
+        compressed = gzip.compress(optimize_pdf(file_bytes), compresslevel=6)
         versioned_name = f"{safe_name.rsplit('.',1)[0]}-{content_hash(file_bytes)}.pdf.gz"
         final_link = upload_to_r2(compressed, versioned_name, content_type="application/pdf", gzip_encoded=True, private=(cat == "Confidential"))
-        
         if final_link:
             ins = supabase.table("circulars").insert({
-                "ref_id": ref_id, "doc_type": dt, "ref_number": rn.strip(),
-                "doc_date": dd.isoformat(), "title": tt.strip(), "category": cat,
-                "tier_required": "Basic", "link": final_link,
-                "supersedes": sup_.strip() or None, "uploaded_by": user_email,
-                "uploaded_at": now_utc().isoformat()
+                "ref_id": ref_id, "doc_type": dt, "ref_number": rn.strip(), "doc_date": dd.isoformat(), "title": tt.strip(), "category": cat,
+                "tier_required": tier, "link": final_link, "supersedes": sup_.strip() or None, "uploaded_by": user_email, "uploaded_at": now_utc().isoformat()
             }).execute()
             n = index_circular_for_ai(ins.data[0]["id"], text) if text else 0
             st.session_state.processing_status = {"success": True, "ref_id": ref_id, "blocks": n, "ocr": ocr}
-        else:
-            st.session_state.processing_status = {"success": False, "error": "Upload failed"}
-    except Exception as e:
-        st.session_state.processing_status = {"success": False, "error": str(e)}
-
-def compress_for_r2(file_bytes):
-    return gzip.compress(optimize_pdf(file_bytes), compresslevel=6)
+        else: st.session_state.processing_status = {"success": False, "error": "Upload failed"}
+    except Exception as e: st.session_state.processing_status = {"success": False, "error": str(e)}
 
 def extract_pdf_text(file_bytes):
     if not OCR_AVAILABLE:
@@ -503,8 +435,7 @@ def extract_pdf_text(file_bytes):
     for pn, page in enumerate(doc):
         try: page_text = page.get_text().strip()
         except Exception: page_text = ""
-        if len(page_text) > 40:
-            all_text.append(page_text)
+        if len(page_text) > 40: all_text.append(page_text)
         else:
             if ocr_done >= OCR_MAX_PAGES:
                 all_text.append(f"[Page {pn+1}: scanned — OCR limit reached]")
@@ -517,8 +448,7 @@ def extract_pdf_text(file_bytes):
                 img_processed = ImageEnhance.Sharpness(Image.fromarray(img_thresh)).enhance(2.0)
                 ocr_text = pytesseract.image_to_string(img_processed, config="--psm 6 -l eng+tel").strip()
                 all_text.append(ocr_text)
-                used_ocr = True
-                ocr_done += 1
+                used_ocr = True; ocr_done += 1
             except Exception as e:
                 log_error("pdf_ocr", f"page {pn+1}: {e}")
                 all_text.append(f"[Page {pn+1}: OCR failed]")
@@ -555,9 +485,7 @@ def index_circular_for_ai(circular_id, text):
 
 @st.cache_data(ttl=1800)
 def search_uploaded_circulars(question, limit=4):
-    try:
-        res = supabase.rpc("search_circular_chunks", {"q": question, "limit_count": limit}).execute()
-        return res.data or []
+    try: return supabase.rpc("search_circular_chunks", {"q": question, "limit_count": limit}).execute().data or []
     except Exception as e:
         log_error("ai_search", str(e))
         return []
@@ -581,8 +509,7 @@ def _call_one(p, key, model, ep, prompt, context):
         c = OpenAI(api_key=key, base_url=(ep or de).rstrip("/"))
         r = c.chat.completions.create(model=model, messages=[{"role": "system", "content": context}, {"role": "user", "content": prompt}], temperature=0.15)
         return r.choices[0].message.content, None
-    except Exception as e:
-        return None, f"{name} error: {e}"
+    except Exception as e: return None, f"{name} error: {e}"
 
 def ai_call(prompt, context):
     primary = get_setting("ai_provider", "gemini")
@@ -601,40 +528,18 @@ def ai_call(prompt, context):
         log_error("ai_" + p, e)
     return None, last or "No AI provider configured."
 
-# --- UI VISIBILITY ---
+# --- CHROME HIDING ---
 def hide_cloud_chrome():
-    st.markdown("""
-    <style>
-    #MainMenu{visibility:hidden !important;}
-    footer{visibility:hidden !important;}
-    header{visibility:hidden !important; height:0 !important;}
-    [data-testid="stToolbar"]{visibility:hidden !important; display:none !important;}
-    [data-testid="stDecoration"]{visibility:hidden !important;}
-    [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;}
-    [data-testid="stAppDeployButton"]{display:none !important;}
-    .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;}
-    [data-testid="collapsedControl"]{visibility:visible !important; display:block !important;}
-    [data-testid="stSidebarCollapsedControl"]{visibility:visible !important; display:block !important;}
-    </style>
-    """, unsafe_allow_html=True)
-
+    st.markdown("""<style>#MainMenu{visibility:hidden !important;} footer{visibility:hidden !important;} header{visibility:hidden !important; height:0 !important;} [data-testid="stToolbar"]{visibility:hidden !important; display:none !important;} [data-testid="stDecoration"]{visibility:hidden !important;} [data-testid="stStatusWidget"]{visibility:hidden !important; display:none !important;} [data-testid="stAppDeployButton"]{display:none !important;} .viewerBadge_container__1QSob,.viewerBadge_link__1S137,.stAppDeployButton{display:none !important;} [data-testid="collapsedControl"]{visibility:visible !important; display:block !important;} [data-testid="stSidebarCollapsedControl"]{visibility:visible !important; display:block !important;}</style>""", unsafe_allow_html=True)
 def show_full_chrome():
-    st.markdown("""
-    <style>
-    #MainMenu{visibility:visible !important;}
-    footer{visibility:hidden !important;}
-    header{visibility:visible !important;}
-    [data-testid="stToolbar"]{visibility:visible !important; display:flex !important;}
-    [data-testid="stStatusWidget"]{visibility:visible !important; display:flex !important;}
-    </style>
-    """, unsafe_allow_html=True)
+    st.markdown("""<style>#MainMenu{visibility:visible !important;} footer{visibility:hidden !important;} header{visibility:visible !important;} [data-testid="stToolbar"]{visibility:visible !important; display:flex !important;} [data-testid="stStatusWidget"]{visibility:visible !important; display:flex !important;}</style>""", unsafe_allow_html=True)
 
 # --- VIEWS ---
 def show_login():
     st.markdown("""
     <div class="login-shell"><div class="login-panel">
-    <div class="login-brand"><div class="login-mark">🏛️</div><h1>GovDocs AI</h1>
-    <p>AI-powered government document workspace for circulars, G.O.s, Tapal, templates and internal rules assistance.</p>
+    <div class="login-brand"><div class="login-mark">🏛️</div><h1>RTA Workspace</h1>
+    <p>Secure government workflow, Tapal tracking, and GovConnect social feed.</p>
     <div style="margin-top:25px;font-size:11px;color:rgba(255,255,255,.72);line-height:1.8;"><b style="color:#fff;">Instant staff accounts</b><br>Verify your email with OTP · Basic is free forever · Pro/Max by admin approval</div>
     </div>
     <div class="login-form"><h2>Welcome</h2><div class="muted">Sign in, or create your account in 60 seconds.</div></div>
@@ -643,18 +548,16 @@ def show_login():
     with c2:
         tab_login, tab_signup, tab_request = st.tabs(["Sign In", "Create Account", "Request Access"])
         with tab_login:
-            email = st.text_input("Email", key="login_email", placeholder="name@department.gov")
+            email = st.text_input("Email", key="login_email", placeholder="name@ap.gov.in")
             password = st.text_input("Password", type="password", key="login_pass")
             remember = st.checkbox("Remember me", value=True)
             if st.button("Sign In →", use_container_width=True, type="primary"):
                 user = get_user(email.strip().lower())
-                if user and user.get("active", True) is False:
-                    st.error("This account has been deactivated. Contact your administrator.")
+                if user and user.get("active", True) is False: st.error("This account has been deactivated. Contact your administrator.")
                 elif user and check_password(password, user["password_hash"]):
                     st.session_state["user_password_hash"] = user["password_hash"]
                     do_login(user, remember)
-                else:
-                    st.error("Invalid email or password.")
+                else: st.error("Invalid email or password.")
         with tab_signup:
             st.caption("Verify your email, set a password — instant Basic account.")
             n = st.text_input("Full Name *")
@@ -669,10 +572,8 @@ def show_login():
             channel = "email"
             ident = em.strip().lower()
             if st.button("Send OTP →", use_container_width=True):
-                if not (n.strip() and off.strip() and dept.strip() and dsg.strip() and email_ok(em)):
-                    st.warning("Fill all required fields correctly.")
-                elif get_user(em.strip().lower()):
-                    st.warning("This email already has an account — use Sign In.")
+                if not (n.strip() and off.strip() and dept.strip() and dsg.strip() and email_ok(em)): st.warning("Fill all required fields correctly.")
+                elif get_user(em.strip().lower()): st.warning("This email already has an account — use Sign In.")
                 else:
                     ok, err = otp_send(ident, channel)
                     if ok: st.success(f"OTP sent to {ident}.")
@@ -680,24 +581,18 @@ def show_login():
             code = st.text_input("Enter 6-digit OTP", max_chars=6)
             if st.button("Verify OTP", use_container_width=True):
                 ok, err = otp_verify(ident, channel, code)
-                st.session_state["otp_ok"] = ok
-                st.session_state["otp_ident"] = ident
+                st.session_state["otp_ok"] = ok; st.session_state["otp_ident"] = ident
                 if ok: st.success("Verified ✓ Now set your password below.")
                 else: st.error(err)
             pw = st.text_input("Create Password *", type="password")
             pw2 = st.text_input("Confirm Password *", type="password")
             if st.button("Create Account →", use_container_width=True, type="primary"):
-                if not st.session_state.get("otp_ok") or st.session_state.get("otp_ident") != ident:
-                    st.warning("Verify the OTP first.")
-                elif len(pw) < 8 or pw != pw2:
-                    st.warning("Password must be 8+ characters and match.")
+                if not st.session_state.get("otp_ok") or st.session_state.get("otp_ident") != ident: st.warning("Verify the OTP first.")
+                elif len(pw) < 8 or pw != pw2: st.warning("Password must be 8+ characters and match.")
                 else:
-                    payload = {"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True,
-                              "department": dept.strip()}
-                    try:
-                        supabase.table("users").insert(payload).execute()
-                    except Exception:
-                        supabase.table("users").insert({"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True}).execute()
+                    payload = {"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True, "department": dept.strip(), "saved_addresses": json.dumps([])}
+                    try: supabase.table("users").insert(payload).execute()
+                    except Exception: supabase.table("users").insert({"email": em.strip().lower(), "name": n.strip(), "password_hash": hash_password(pw), "tier": "Basic", "active": True}).execute()
                     st.session_state["otp_ok"] = False
                     st.session_state["show_welcome"] = True
                     do_login(get_user(em.strip().lower()))
@@ -712,20 +607,16 @@ def show_login():
                 if rn.strip() and re_.strip():
                     create_pending_request(rn.strip(), re_.strip().lower(), f"Role: {rr.strip()} | Dept: {rd.strip()} | {rnote.strip()}")
                     st.success("Request submitted. The administrator will contact you after review.")
-                else:
-                    st.warning("Please enter your name and email.")
+                else: st.warning("Please enter your name and email.")
 
 def render_sidebar(user):
     with st.sidebar:
-        st.markdown('<div class="sidebar-brand"><div class="sidebar-logo">🏛️</div><div><div class="sidebar-brand-title">GovDocs AI</div><div class="sidebar-brand-sub">Government Workspace</div></div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-brand"><div class="sidebar-logo">🏛️</div><div><div class="sidebar-brand-title">RTA Workspace</div><div class="sidebar-brand-sub">AP Govt Edition</div></div></div>', unsafe_allow_html=True)
         office = safe_str(user.get("department"))
         extra = f"<div class='profile-email'>{esc(office)}</div>" if office else ""
         st.markdown(f'<div class="profile-card"><div class="profile-name">{esc(user.get("name"))}</div><div class="profile-email">{esc(user.get("email"))}</div>{extra}<div class="profile-role"><span style="font-size:10px;color:#64748B;">Access tier</span>{tier_badge(user.get("tier", "Staff"))}</div></div>', unsafe_allow_html=True)
-        
-        options = ["🏠 Dashboard", "📢 Circulars & G.O.s", "🤖 AI Rules Assistant", "📝 Templates", "✉️ Smart Tapal Register", "📮 Dispatch Labels", "📞 Staff Directory", "💳 Plans & Billing"]
-        if user.get("tier") == "Admin":
-            options.append("⚙️ Admin Command Center")
-            
+        options = ["🏠 Dashboard", "📢 Circulars & G.O.s", "🤖 AI Rules Assistant", "📝 Templates", "✉️ Smart Tapal", "🤝 GovConnect", "📮 Dispatch Labels", "📞 Staff Directory", "💳 Plans & Billing"]
+        if user.get("tier") == "Admin": options.append("⚙️ Admin Command Center")
         menu = st.radio("Navigation", options, label_visibility="collapsed")
         if st.button("🚪 Logout", use_container_width=True):
             clear_session_token(read_session_cookie())
@@ -737,8 +628,8 @@ def render_sidebar(user):
 
 def topbar(user):
     st.markdown(
-        f'<div class="app-topbar"><div><div class="app-topbar-title">Government Document & Rules Workspace</div>'
-        f'<div class="app-topbar-sub">Internal · {safe_str(user.get("department")) or "GovDocs AI"}</div></div>'
+        f'<div class="app-topbar"><div><div class="app-topbar-title">RTA Digital Workspace</div>'
+        f'<div class="app-topbar-sub">Internal · {safe_str(user.get("department")) or "AP Govt"}</div></div>'
         f'<div style="text-align:right;"><div class="app-topbar-title">{date.today().strftime("%d %b %Y")}</div>'
         f'<div class="app-topbar-sub">{esc(user.get("name"))} · {esc(user.get("tier", "Staff"))}</div></div></div>',
         unsafe_allow_html=True,
@@ -747,8 +638,7 @@ def topbar(user):
 def render_doc_open_link(rec, key_prefix):
     link = safe_str(rec.get("link"))
     if not link: return
-    if link.startswith("http"):
-        st.markdown(f"[📥 Open document]({link})")
+    if link.startswith("http"): st.markdown(f"[📥 Open document]({link})")
     else:
         if st.button("🔒 Generate secure link (valid 5 min)", key=f"{key_prefix}_{rec.get('id')}"):
             try: st.markdown(f"[📥 Open now — expires in 5 min]({generate_presigned_url(link)})")
@@ -771,8 +661,7 @@ def show_home(user, rls_client):
     st.divider()
     st.subheader("📢 Recently published")
     recent = sorted(circulars, key=lambda r: safe_str(r.get("uploaded_at")), reverse=True)[:5]
-    if not recent:
-        st.info("No circulars published yet.")
+    if not recent: st.info("No circulars published yet.")
     else:
         for c_ in recent:
             allowed = has_access(user.get("tier", "Staff"), c_.get("tier_required", "Basic"))
@@ -787,10 +676,6 @@ def show_home(user, rls_client):
 
 def show_circulars(user, rls_client):
     page_header("Circulars & G.O.s", "Browse published circulars, G.O.s and notifications.")
-    _circulars_browser(user, rls_client)
-
-@st.fragment
-def _circulars_browser(user, rls_client):
     rows = fetch_circulars(rls_client)
     a, b, c = st.columns([2, 1, 1])
     with a: search = st.text_input("Search", placeholder="Search title, reference number or category...", label_visibility="collapsed")
@@ -800,19 +685,14 @@ def _circulars_browser(user, rls_client):
     with c:
         cats = ["All"] + sorted({safe_str(r.get("category")) for r in rows if r.get("category")})
         cfilter = st.selectbox("Category", cats, label_visibility="collapsed")
-        
     if search:
         s = search.lower()
         rows = [r for r in rows if s in safe_str(r.get("title")).lower() or s in safe_str(r.get("ref_id")).lower() or s in safe_str(r.get("category")).lower()]
     if tfilter != "All": rows = [r for r in rows if r.get("doc_type") == tfilter]
     if cfilter != "All": rows = [r for r in rows if r.get("category") == cfilter]
-    
     rows = sorted(rows, key=lambda r: safe_str(r.get("doc_date")), reverse=True)
     st.caption(f"{len(rows)} document(s)")
-    if not rows:
-        st.info("No circulars match your filters.")
-        return
-        
+    if not rows: st.info("No circulars match your filters."); return
     for r in rows:
         allowed = has_access(user.get("tier", "Staff"), r.get("tier_required", "Basic"))
         sup = f" · Supersedes {esc(r.get('supersedes'))}" if r.get("supersedes") else ""
@@ -834,33 +714,26 @@ def show_ai(user):
     engine_name = PROVIDERS.get(engine, PROVIDERS["gemini"])[0]
     admin_provider = engine.lower()
     default_idx = ["gemini", "groq", "qwen"].index(admin_provider) if admin_provider in ["gemini", "groq", "qwen"] else 0
-    
     with st.container(border=True):
         c1, c2, c3 = st.columns([1.1, 1.9, 1])
         with c1: provider = st.selectbox("Model", ["Gemini", "Groq", "Qwen"], index=default_idx, key="ai_provider_ui")
         with c2: custom_key = st.text_input("Custom API key (optional)", type="password", placeholder="Power-user key; leave blank for system key")
         with c3: st.markdown(f"<div style='padding-top:29px;text-align:right;color:#64748B;font-size:11px;'>AI queries used: <b>{used}/{DAILY_AI_LIMIT}</b><br>Admin engine: {engine_name}</div>", unsafe_allow_html=True)
-        
     if st.session_state.messages:
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
     else:
         with st.container(border=True):
             st.markdown("Try asking:\n- What are the rules for earned leave?\n- Which circular covers the latest TA/DA revision?\n- What documents are required for this process?")
-            
     if used >= DAILY_AI_LIMIT:
         st.warning("Daily AI limit reached. Try again tomorrow or ask an administrator about your plan limit.")
         return
-        
     user_input = st.chat_input("Ask about rules, circulars, policies or office procedures...")
     if not user_input: return
-    
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"): st.markdown(user_input)
-    
     provider_code = provider.lower()
     smalltalk = user_input.strip().lower().rstrip("!.," ) in {"hi", "hello", "hey", "namaste", "good morning", "good afternoon", "good evening", "thanks", "thank you", "ok", "okay", "test"}
-    
     with st.chat_message("assistant"):
         sources = [] if smalltalk else search_uploaded_circulars(user_input, limit=4)
         base_rules = ("You are an internal staff knowledge assistant for a state transport department office. "
@@ -873,7 +746,6 @@ def show_ai(user):
             sys_context = base_rules + f"Use the OFFICE CIRCULAR EXCERPTS below as your PRIMARY source.\n\nOFFICE CIRCULAR EXCERPTS:\n{source_text}"
         else:
             sys_context = base_rules + "No uploaded circulars matched this question. Start your answer with 'Not found in the uploaded circulars.' and give brief general guidance."
-            
         with st.spinner("Checking indexed documents and rules..."):
             delimited = f"<user_query>{user_input}</user_query>"
             reply, err = ai_call(delimited, sys_context) if not custom_key.strip() else _call_one(provider_code, custom_key.strip(), get_setting(f"{provider_code}_model", PROVIDERS.get(provider_code, PROVIDERS["gemini"])[2]), get_setting(f"{provider_code}_endpoint", PROVIDERS.get(provider_code, PROVIDERS["gemini"])[3]), delimited, sys_context)
@@ -887,20 +759,16 @@ def show_ai(user):
                 if sources:
                     st.markdown("📄 Matched circulars")
                     for s in sources: st.caption(f"• {s.get('ref_id')} — {s.get('title')}")
-                elif not smalltalk:
-                    st.caption("No matching uploaded circulars — answer is based on general guidance.")
-                    
+                elif not smalltalk: st.caption("No matching uploaded circulars — answer is based on general guidance.")
         st.session_state.messages.append({"role": "assistant", "content": reply})
         log_ai_usage(user["email"])
 
 def show_templates(user, rls_client):
     page_header("Drafts & Templates", "Pre-approved office formats and personal quick-fill templates.")
     t1, t2, t3 = st.tabs(["📋 Institutional Templates", "⚡ My Quick-Fill Addresses", "✍️ My Templates & AI Style"])
-    
     with t1:
         rows = fetch_letter_templates(rls_client)
-        if not rows:
-            st.info("No institutional templates available yet. Ask an administrator to publish one.")
+        if not rows: st.info("No institutional templates available yet. Ask an administrator to publish one.")
         else:
             selected_template = st.selectbox("Select a template", [t["name"] for t in rows], key="inst_template_select")
             if selected_template:
@@ -913,16 +781,12 @@ def show_templates(user, rls_client):
                     if placeholders:
                         st.markdown("### Fill in the details:")
                         values = {}
-                        for ph in placeholders:
-                            values[ph] = st.text_input(ph.replace("_", " ").title(), key=f"ph_{ph}")
+                        for ph in placeholders: values[ph] = st.text_input(ph.replace("_", " ").title(), key=f"ph_{ph}")
                         if st.button("Generate Document", type="primary"):
                             filled_content = content
-                            for ph, val in values.items():
-                                filled_content = filled_content.replace(f"{{{{{ph}}}}}", val)
+                            for ph, val in values.items(): filled_content = filled_content.replace(f"{{{{{ph}}}}}", val)
                             st.download_button("📥 Download", filled_content.encode(), f"{selected_template}.txt", "text/plain")
-                    else:
-                        st.download_button("📥 Download Template", content.encode(), f"{selected_template}.txt", "text/plain")
-                        
+                    else: st.download_button("📥 Download Template", content.encode(), f"{selected_template}.txt", "text/plain")
     with t2:
         st.markdown("### Your Saved Quick-Fill Addresses (4 slots)")
         saved_addresses = json.loads(user.get("saved_addresses", "[]") or "[]")
@@ -932,8 +796,7 @@ def show_templates(user, rls_client):
                 if i < len(saved_addresses): st.markdown(f"**Slot {i+1}:** {saved_addresses[i]}")
                 else: st.markdown(f"**Slot {i+1}:** Empty")
             with col2:
-                if st.button("Edit" if i < len(saved_addresses) else "Add", key=f"edit_addr_{i}"):
-                    st.session_state[f"editing_addr_{i}"] = True
+                if st.button("Edit" if i < len(saved_addresses) else "Add", key=f"edit_addr_{i}"): st.session_state[f"editing_addr_{i}"] = True
             if st.session_state.get(f"editing_addr_{i}"):
                 new_addr = st.text_area(f"Address {i+1}", value=saved_addresses[i] if i < len(saved_addresses) else "", key=f"addr_input_{i}")
                 if st.button("Save", key=f"save_addr_{i}"):
@@ -941,32 +804,25 @@ def show_templates(user, rls_client):
                     else: saved_addresses.append(new_addr)
                     supabase.table("users").update({"saved_addresses": json.dumps(saved_addresses)}).eq("id", user["id"]).execute()
                     st.session_state[f"editing_addr_{i}"] = False
-                    st.success("Saved!")
-                    st.rerun()
-                    
+                    st.success("Saved!"); st.rerun()
     with t3:
         st.markdown("### 📝 Your Personal Letter Templates")
         st.caption("Save your own letters here. The AI will learn your writing style, tone, and formatting preferences.")
-        try:
-            user_templates = supabase.table("personal_templates").select("*").eq("user_email", user["email"]).order("created_at", desc=True).execute().data or []
+        try: user_templates = supabase.table("personal_templates").select("*").eq("user_email", user["email"]).order("created_at", desc=True).execute().data or []
         except Exception:
             user_templates = []
             st.info("ℹ️ Note: Personal templates feature requires the 'personal_templates' table in Supabase.")
-            
         if user_templates:
             st.markdown(f"**You have {len(user_templates)} saved template(s)**")
             for tmpl in user_templates:
                 with st.container(border=True):
                     st.markdown(f"**{tmpl['title']}** ({tmpl.get('category', 'General')})")
                     st.caption(f"Created: {tmpl.get('created_at', 'Unknown')}")
-                    with st.expander("View content"):
-                        st.text_area("", value=tmpl['content'], height=200, disabled=True, key=f"view_tmpl_{tmpl['id']}")
+                    with st.expander("View content"): st.text_area("", value=tmpl['content'], height=200, disabled=True, key=f"view_tmpl_{tmpl['id']}")
                     if st.button("🗑️ Delete", key=f"del_ptmpl_{tmpl['id']}"):
                         supabase.table("personal_templates").delete().eq("id", tmpl["id"]).execute()
                         st.rerun()
-        else:
-            st.info("No personal templates yet. Create your first one below!")
-            
+        else: st.info("No personal templates yet. Create your first one below!")
         st.divider()
         st.markdown("### ✨ Create New Personal Template")
         with st.form("create_personal_template"):
@@ -974,24 +830,16 @@ def show_templates(user, rls_client):
             pt_category = st.selectbox("Category", ["General", "Leave", "Enforcement", "Vehicle", "Finance", "Other"])
             pt_content = st.text_area("Letter Content *", height=300, placeholder="Paste your complete letter here. The AI will analyze your style, formatting, and tone...")
             if st.form_submit_button("💾 Save Template", type="primary", use_container_width=True):
-                if not pt_title.strip() or not pt_content.strip():
-                    st.warning("Title and content are required.")
+                if not pt_title.strip() or not pt_content.strip(): st.warning("Title and content are required.")
                 else:
                     try:
-                        supabase.table("personal_templates").insert({
-                            "user_email": user["email"], "title": pt_title.strip(), "category": pt_category,
-                            "content": pt_content.strip(), "created_at": now_utc().isoformat()
-                        }).execute()
-                        st.success("Template saved! The AI will now learn from your writing style.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to save template. Error: {e}")
-                        
+                        supabase.table("personal_templates").insert({"user_email": user["email"], "title": pt_title.strip(), "category": pt_category, "content": pt_content.strip(), "created_at": now_utc().isoformat()}).execute()
+                        st.success("Template saved! The AI will now learn from your writing style."); st.rerun()
+                    except Exception as e: st.error(f"Failed to save template. Error: {e}")
         st.divider()
         st.markdown("### 🤖 AI Style-Cloning Drafter")
         st.caption("Select 2-3 of your saved templates to train the AI. It will mimic your exact style, tone, and formatting.")
-        if len(user_templates) < 2:
-            st.warning("Save at least 2 personal templates first to enable AI style-cloning.")
+        if len(user_templates) < 2: st.warning("Save at least 2 personal templates first to enable AI style-cloning.")
         else:
             selected_for_style = st.multiselect("Select templates for style training (2-3 recommended)", [t["title"] for t in user_templates], max_selections=3, key="style_templates_select")
             if selected_for_style:
@@ -1003,8 +851,7 @@ def show_templates(user, rls_client):
                 draft_subject = st.text_input("Subject / Topic *", placeholder="e.g., Request for Compensatory Casual Leave")
                 draft_details = st.text_area("Key Details", height=100, placeholder="What should the letter cover? (e.g., dates, reasons, specific requests)")
                 if st.button("🎨 Generate with My Style", type="primary", use_container_width=True):
-                    if not draft_subject.strip():
-                        st.warning("Please enter a subject.")
+                    if not draft_subject.strip(): st.warning("Please enter a subject.")
                     else:
                         with st.spinner("AI is drafting in your personal style..."):
                             style_prompt = (f"You are an AI assistant that writes letters in the user's personal style. "
@@ -1024,7 +871,6 @@ def show_templates(user, rls_client):
 def show_tapal(user, rls_client):
     page_header("Smart Tapal Register", "Log, browse and report inward/outward correspondence workflows.")
     t1, t2, t3 = st.tabs(["➕ New Entry", "📋 Workflow Board", "📊 Monthly Report"])
-    
     with t1:
         draft_key = f"tapal_draft_{user['email']}"
         saved_draft = st.session_state.get(draft_key, {})
@@ -1041,43 +887,28 @@ def show_tapal(user, rls_client):
             with c:
                 section = st.selectbox("Assign to Section", ["C4", "A1", "Establishment", "Accounts", "Enforcement"])
                 remarks = st.text_area("Remarks", value=saved_draft.get("remarks", ""), height=85)
-                
             if st.form_submit_button("✅ Generate R.No & Save", type="primary", use_container_width=True):
-                if not from_to.strip() or not subject.strip():
-                    st.warning("From/To and Subject are required.")
+                if not from_to.strip() or not subject.strip(): st.warning("From/To and Subject are required.")
                 else:
                     try:
-                        # Notice we omit r_no here; the database trigger will handle it automatically
                         rls_client.table("tapal_log").insert({
-                            "direction": direction,
-                            "tapal_date": tdate.isoformat(),
-                            "from_to": from_to.strip(),
-                            "subject": subject.strip(),
-                            "file_ref": file_ref.strip() or None,
-                            "status": status,
-                            "section": section,
-                            "remarks": remarks.strip() or None,
-                            "entered_by": user["email"],
-                            "entered_at": now_utc().isoformat()
+                            "direction": direction, "tapal_date": tdate.isoformat(), "from_to": from_to.strip(), "subject": subject.strip(),
+                            "file_ref": file_ref.strip() or None, "status": status, "section": section, "remarks": remarks.strip() or None,
+                            "entered_by": user["email"], "entered_at": now_utc().isoformat()
                         }).execute()
                         if draft_key in st.session_state: del st.session_state[draft_key]
                         fetch_tapal.clear()
-                        st.success("Entry saved successfully! Smart R.No generated.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Database save failed. Details: {str(e)}")
-                        
+                        st.success("Entry saved successfully! Database trigger generated the Smart R.No."); st.rerun()
+                    except Exception as e: st.error(f"Database save failed. Details: {str(e)}")
     with t2:
         rows = fetch_tapal(rls_client)
         a, b, c = st.columns([2, 1, 1])
         with a: search = st.text_input("Search Tapal", placeholder="Search name, subject or reference...", label_visibility="collapsed")
         with b: dfilter = st.selectbox("Direction", ["All", "Inward", "Outward"], label_visibility="collapsed")
         with c: sfilter = st.selectbox("Section", ["All", "C4", "A1", "Establishment", "Accounts", "Enforcement"], label_visibility="collapsed")
-        
         if search: rows = [r for r in rows if search.lower() in str(r).lower()]
         if dfilter != "All": rows = [r for r in rows if r.get("direction") == dfilter]
         if sfilter != "All": rows = [r for r in rows if r.get("section") == sfilter]
-            
         st.caption(f"{len(rows)} record(s)")
         for r in rows:
             inward = r.get("direction") == "Inward"
@@ -1088,7 +919,6 @@ def show_tapal(user, rls_client):
             remarks_txt = f'<br><span style="font-size:10px;color:#64748B;">📝 {esc(r.get("remarks"))}</span>' if r.get("remarks") else ""
             card_html = f'<div class="tapal-card {cls}"><div style="font-weight:700;font-size:13px;color:var(--navy-900);">{icon} {esc(r_no)} — {esc(r.get("subject"))}</div><div style="font-size:11px;color:#64748B;margin-top:5px;"><b>From/To:</b> {esc(r.get("from_to"))} | <b>Date:</b> {esc(r.get("tapal_date"))} | <b>Status:</b> {esc(r.get("status"))} | <b>Section:</b> {esc(r.get("section"))}{ref_txt}</div>{remarks_txt}</div>'
             st.markdown(card_html, unsafe_allow_html=True)
-            
     with t3:
         today = date.today()
         a, b = st.columns(2)
@@ -1098,8 +928,7 @@ def show_tapal(user, rls_client):
         end = date(int(ry) + (1 if rm == 12 else 0), rm % 12 + 1, 1)
         res = rls_client.table("tapal_log").select("*").gte("tapal_date", start.isoformat()).lt("tapal_date", end.isoformat()).order("tapal_date").execute()
         df = pd.DataFrame(res.data or [])
-        if df.empty:
-            st.info(f"No entries for {start.strftime('%B %Y')}.")
+        if df.empty: st.info(f"No entries for {start.strftime('%B %Y')}.")
         else:
             a, b, c = st.columns(3)
             a.metric("Inward", int((df["direction"] == "Inward").sum()))
@@ -1109,6 +938,35 @@ def show_tapal(user, rls_client):
             st.dataframe(df[cols], use_container_width=True, hide_index=True)
             st.download_button("📥 Download CSV", df.to_csv(index=False).encode(), f"tapal_report_{start:%Y_%m}.csv", "text/csv")
 
+def show_govconnect(user, rls_client):
+    page_header("GovConnect", "Official department updates, field visits, and announcements.")
+    t1, t2 = st.tabs(["📱 Feed", "✍️ New Post"])
+    with t2:
+        with st.form("new_post_form", clear_on_submit=True):
+            content = st.text_area("What's happening in your section?", height=100)
+            photo = st.file_uploader("Attach Photo (Max 5MB - Served via ImageKit)", type=["jpg", "png", "jpeg"])
+            if st.form_submit_button("Post Update", type="primary", use_container_width=True):
+                if not content.strip() and not photo: st.warning("Add text or a photo to post.")
+                else:
+                    img_url = None
+                    if photo:
+                        try: img_url = upload_social_image(photo.read(), f"post_{int(time.time())}.jpg")
+                        except Exception as e: st.error(f"Image upload failed: {e}"); return
+                    try:
+                        rls_client.table("social_posts").insert({"author_email": user["email"], "content": content.strip(), "image_url": img_url, "department": user.get("department", "General"), "created_at": now_utc().isoformat()}).execute()
+                        fetch_social_posts.clear()
+                        st.success("Posted securely!"); st.rerun()
+                    except Exception as e: st.error(f"Database error: {e}")
+    with t1:
+        posts = fetch_social_posts(rls_client)
+        if not posts: st.info("No posts yet. Be the first to share an update!")
+        for p in posts:
+            with st.container(border=True):
+                st.markdown(f"**{esc(p.get('users', {}).get('name', 'Unknown'))}** · <span style='color:#64748B;font-size:11px;'>{esc(p.get('department'))}</span>", unsafe_allow_html=True)
+                if p.get("content"): st.markdown(esc(p.get("content")))
+                if p.get("image_url"): st.image(p.get("image_url"), use_container_width=True)
+                st.caption(f"🕒 {p.get('created_at')[:16].replace('T', ' ')}")
+
 def show_dispatch(user):
     page_header("Dispatch Label Generator", "Extract an address from a scan/photo and generate print-ready labels.")
     saved_addresses = json.loads(user.get("saved_addresses", "[]") or "[]")
@@ -1117,10 +975,7 @@ def show_dispatch(user):
         cols = st.columns(min(4, len(saved_addresses)))
         for i, addr in enumerate(saved_addresses):
             with cols[i]:
-                if st.button(f"Use Address {i+1}", key=f"quick_addr_{i}", use_container_width=True):
-                    st.session_state["dispatch_address"] = addr
-                    st.rerun()
-                    
+                if st.button(f"Use Address {i+1}", key=f"quick_addr_{i}", use_container_width=True): st.session_state["dispatch_address"] = addr; st.rerun()
     with st.container(border=True):
         st.markdown("1 · Upload address image")
         photo = st.file_uploader("Photo or scan", type=["png", "jpg", "jpeg"])
@@ -1133,37 +988,25 @@ def show_dispatch(user):
                     img_thresh = cv2.adaptiveThreshold(img_array, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
                     img_processed = Image.fromarray(img_thresh)
                     img_processed = ImageEnhance.Sharpness(img_processed).enhance(2.0)
-                    if img_processed.width < 1500:
-                        img_processed = img_processed.resize((1500, int(img_processed.height * 1500 / img_processed.width)))
+                    if img_processed.width < 1500: img_processed = img_processed.resize((1500, int(img_processed.height * 1500 / img_processed.width)))
                     ocr_text = pytesseract.image_to_string(img_processed, config="--psm 6 -l eng+tel").strip()
                     st.text_area("2 · Review extracted address", value=ocr_text, height=100, key="ocr_extracted")
-                    with st.expander("Preview processed image"):
-                        st.image(img_processed, use_container_width=True)
-                except Exception as e:
-                    st.warning(f"OCR unavailable or failed: {e}")
-            else:
-                st.warning("OCR libraries (OpenCV, pytesseract) not installed on this server.")
-                
+                    with st.expander("Preview processed image"): st.image(img_processed, use_container_width=True)
+                except Exception as e: st.warning(f"OCR unavailable or failed: {e}")
+            else: st.warning("OCR libraries (OpenCV, pytesseract) not installed on this server.")
         default_address = st.session_state.get("dispatch_address", st.session_state.get("ocr_extracted", ""))
         address_text = st.text_area("3 · Final address *", value=default_address, height=130)
-        
         a, b, c = st.columns(3)
         with a: font_size = st.slider("Font size (pt)", 14, 36, 22)
         with b: env = st.selectbox("Envelope", ["Long Cover (approx 10 x 4.5 in)", "C5 (229 x 162 mm)", "DL (220 x 110 mm)", "Custom"])
         with c: copies = st.number_input("Copies", 1, 100, 1)
-        
         presets = {"Long Cover (approx 10 x 4.5 in)": (254, 114), "C5 (229 x 162 mm)": (229, 162), "DL (220 x 110 mm)": (220, 110)}
         if env == "Custom":
             x, y = st.columns(2)
-            w = x.number_input("Width (mm)", 50, 400, 220)
-            h = y.number_input("Height (mm)", 50, 400, 110)
-        else:
-            w, h = presets[env]
-            
+            w = x.number_input("Width (mm)", 50, 400, 220); h = y.number_input("Height (mm)", 50, 400, 110)
+        else: w, h = presets[env]
         if st.button("🖨️ Generate Label PDF", type="primary", use_container_width=True):
-            if not address_text.strip():
-                st.warning("Please enter an address.")
-                return
+            if not address_text.strip(): st.warning("Please enter an address."); return
             try:
                 from reportlab.lib.units import mm
                 from reportlab.pdfgen import canvas
@@ -1174,25 +1017,14 @@ def show_dispatch(user):
                 for _ in range(int(copies)):
                     c.setFont("Helvetica-Bold", font_size)
                     y = (h * mm + len(lines) * lh) / 2 - lh
-                    for ln in lines:
-                        c.drawString(10 * mm, y, ln)
-                        y -= lh
+                    for ln in lines: c.drawString(10 * mm, y, ln); y -= lh
                     c.showPage()
-                c.save()
-                buf.seek(0)
-                try:
-                    supabase.table("dispatch_log").insert({
-                        "address_text": address_text.strip(),
-                        "copies": int(copies),
-                        "generated_by": user["email"],
-                        "generated_at": now_utc().isoformat()
-                    }).execute()
-                except Exception:
-                    pass # Ignore if dispatch_log table doesn't exist yet
+                c.save(); buf.seek(0)
+                try: supabase.table("dispatch_log").insert({"address_text": address_text.strip(), "copies": int(copies), "generated_by": user["email"], "generated_at": now_utc().isoformat()}).execute()
+                except Exception: pass
                 st.success(f"Generated {copies} label(s).")
                 st.download_button("📥 Download Label PDF", buf, "dispatch_labels.pdf", "application/pdf")
-            except Exception as e:
-                st.error(f"Couldn't generate the PDF: {e}")
+            except Exception as e: st.error(f"Couldn't generate the PDF: {e}")
 
 def show_directory(user, rls_client):
     page_header("Staff Directory", "Find contacts across departments and roles.")
@@ -1201,15 +1033,12 @@ def show_directory(user, rls_client):
     if search:
         s = search.lower()
         rows = [r for r in rows if s in " ".join(str(v) for v in r.values()).lower()]
-    if not rows:
-        st.info("No staff records found.")
-        return
+    if not rows: st.info("No staff records found."); return
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 def request_upgrade(u, tier):
     ex = supabase.table("access_requests").select("id").eq("email", u["email"]).eq("requested_tier", tier).eq("status", "pending").execute()
-    if ex.data:
-        st.info("You already have a pending request for this plan.")
+    if ex.data: st.info("You already have a pending request for this plan.")
     else:
         supabase.table("access_requests").insert({"user_id": u.get("id"), "email": u["email"], "requested_tier": tier, "status": "pending"}).execute()
         st.success("Request sent to admin for approval.")
@@ -1222,7 +1051,6 @@ def show_billing(user):
     max_p = int(get_setting("max_yearly" if yearly else "max_monthly", "9588" if yearly else "799"))
     per = "year" if yearly else "month"
     c1, c2, c3 = st.columns(3)
-    
     with c1:
         st.markdown('<div class="plan-card"><div class="plan-name">Basic</div><div class="plan-price">₹0<span class="plan-period">/ month</span></div><div class="plan-description">Essential tools for everyday office work.</div><div class="feature">✓ Standard circular reference</div><div class="feature">✓ Tapal register</div><div class="feature">✓ Directory access</div><div class="feature">✓ Daily rate-limited AI queries</div></div>', unsafe_allow_html=True)
         st.button("Current plan" if user.get("tier") in ("Basic", "Staff") else "Get Started", disabled=True, use_container_width=True, key="basic_plan")
@@ -1230,26 +1058,19 @@ def show_billing(user):
         st.markdown(f'<div class="plan-card featured"><div class="plan-pill">MOST POPULAR</div><div class="plan-name">Pro</div><div class="plan-price">₹{pro_p:,}<span class="plan-period">/ {per}</span></div><div class="plan-description">For professionals that need faster access.</div><div class="feature">✓ Everything in Basic</div><div class="feature">✓ Priority AI access</div><div class="feature">✓ Template downloads</div><div class="feature">✓ Pro-grade circulars</div></div>', unsafe_allow_html=True)
         if user.get("tier") in ("Basic", "Staff"):
             if st.button("Request Pro Access", type="primary", use_container_width=True, key="pro_plan"):
-                request_upgrade(user, "Pro")
-                st.rerun()
-        else:
-            st.button("Current plan", disabled=True, use_container_width=True, key="pro_cur")
+                request_upgrade(user, "Pro"); st.rerun()
+        else: st.button("Current plan", disabled=True, use_container_width=True, key="pro_cur")
     with c3:
         st.markdown(f'<div class="plan-card"><div class="plan-name" style="color:#6D28D9;">Max</div><div class="plan-price">₹{max_p:,}<span class="plan-period">/ {per}</span></div><div class="plan-description">Full workspace power for advanced use.</div><div class="feature">✓ Everything in Pro</div><div class="feature">✓ Unlimited archives</div><div class="feature">✓ Priority queue routing</div><div class="feature">✓ Priority support</div></div>', unsafe_allow_html=True)
         if user.get("tier") in ("Basic", "Staff", "Pro"):
             if st.button("Request Max Access", type="primary", use_container_width=True, key="max_plan"):
-                request_upgrade(user, "Max")
-                st.rerun()
-        else:
-            st.button("Current plan", disabled=True, use_container_width=True, key="max_cur")
+                request_upgrade(user, "Max"); st.rerun()
+        else: st.button("Current plan", disabled=True, use_container_width=True, key="max_cur")
 
 def show_admin(user, rls_client):
-    if user.get("tier") != "Admin":
-        st.error("Admin access required.")
-        return
+    if user.get("tier") != "Admin": st.error("Admin access required."); return
     page_header("Admin Command Center", "Manage users, publish documents, configure AI and monitor health.")
     section = st.radio("Admin section", ["👥 Users", "🏢 Org Settings", "📢 Document Publisher", "📝 Letter Templates", "🔧 AI & Gateway Settings", "🩺 Health & Diagnostics"], horizontal=True, label_visibility="collapsed")
-    
     if section == "👥 Users":
         st.subheader("Pending access requests")
         res = rls_client.table("pending_requests").select("*").eq("status", "pending").execute()
@@ -1266,13 +1087,9 @@ def show_admin(user, rls_client):
                             if pw:
                                 rls_client.table("users").insert({"email": r["email"], "name": r["name"], "password_hash": hash_password(pw), "tier": tr, "active": True, "saved_addresses": json.dumps([])}).execute()
                                 rls_client.table("pending_requests").update({"status": "approved"}).eq("id", r["id"]).execute()
-                                st.success("Approved.")
-                                st.rerun()
-                            else:
-                                st.warning("Set a password first.")
-        else:
-            st.caption("No pending requests.")
-            
+                                st.success("Approved."); st.rerun()
+                            else: st.warning("Set a password first.")
+        else: st.caption("No pending requests.")
         st.subheader("Pro/Max upgrade requests")
         ups = rls_client.table("access_requests").select("*").eq("status", "pending").execute()
         if ups.data:
@@ -1284,75 +1101,55 @@ def show_admin(user, rls_client):
                         if st.button("Approve", key=f"up_ok_{r['id']}", type="primary"):
                             rls_client.table("users").update({"tier": r["requested_tier"]}).eq("email", r["email"]).execute()
                             rls_client.table("access_requests").update({"status": "approved", "reviewed_by": user["email"], "reviewed_at": now_utc().isoformat()}).eq("id", r["id"]).execute()
-                            st.success("Upgraded.")
-                            st.rerun()
+                            st.success("Upgraded."); st.rerun()
                     with b:
                         if st.button("Reject", key=f"up_no_{r['id']}"):
                             rls_client.table("access_requests").update({"status": "rejected", "reviewed_by": user["email"], "reviewed_at": now_utc().isoformat()}).eq("id", r["id"]).execute()
                             st.rerun()
-        else:
-            st.caption("No upgrade requests.")
-            
+        else: st.caption("No upgrade requests.")
         st.divider()
         st.subheader("Create user directly")
         with st.form("create_user_form", clear_on_submit=True):
             a, b = st.columns(2)
-            with a:
-                cn = st.text_input("Full Name")
-                ce = st.text_input("Email")
-            with b:
-                cp = st.text_input("Password", type="password")
-                cr = st.selectbox("Tier", ["Staff", "Pro", "Max", "Admin"])
+            with a: cn = st.text_input("Full Name"); ce = st.text_input("Email")
+            with b: cp = st.text_input("Password", type="password"); cr = st.selectbox("Tier", ["Staff", "Pro", "Max", "Admin"])
             if st.form_submit_button("+ Create Account", type="primary", use_container_width=True):
-                if not (cn.strip() and ce.strip() and cp):
-                    st.warning("Name, email and password are required.")
-                elif rls_client.table("users").select("id").eq("email", ce.strip().lower()).execute().data:
-                    st.warning("Email already exists.")
+                if not (cn.strip() and ce.strip() and cp): st.warning("Name, email and password are required.")
+                elif rls_client.table("users").select("id").eq("email", ce.strip().lower()).execute().data: st.warning("Email already exists.")
                 else:
                     rls_client.table("users").insert({"email": ce.strip().lower(), "name": cn.strip(), "password_hash": hash_password(cp), "tier": cr, "active": True, "saved_addresses": json.dumps([])}).execute()
-                    st.success("Account created.")
-                    st.rerun()
-                    
+                    st.success("Account created."); st.rerun()
         st.divider()
         st.subheader("User roster")
         all_users = rls_client.table("users").select("*").execute().data or []
         us = st.text_input("Search users", placeholder="Name or email...")
-        if us:
-            all_users = [u for u in all_users if us.lower() in safe_str(u.get("name")).lower() or us.lower() in safe_str(u.get("email")).lower()]
+        if us: all_users = [u for u in all_users if us.lower() in safe_str(u.get("name")).lower() or us.lower() in safe_str(u.get("email")).lower()]
         for u in all_users:
             active = u.get("active", True)
             with st.container(border=True):
                 a, b, c, d = st.columns([2.2, 1, 1.1, 1])
-                with a:
-                    st.markdown(f"{'🟢' if active else '🔴'} {safe_str(u.get('name'))}")
-                    st.caption(safe_str(u.get("email")))
-                with b:
-                    st.markdown(tier_badge(u.get("tier", "Staff")), unsafe_allow_html=True)
+                with a: st.markdown(f"{'🟢' if active else '🔴'} {safe_str(u.get('name'))}"); st.caption(safe_str(u.get("email")))
+                with b: st.markdown(tier_badge(u.get("tier", "Staff")), unsafe_allow_html=True)
                 with c:
                     npw = st.text_input("New password", key=f"rpw_{u['id']}", type="password", label_visibility="collapsed", placeholder="New password")
                     if st.button("Reset", key=f"rst_{u['id']}"):
                         if npw:
                             rls_client.table("users").update({"password_hash": hash_password(npw)}).eq("id", u["id"]).execute()
                             st.success("Reset.")
-                        else:
-                            st.warning("Enter a password.")
+                        else: st.warning("Enter a password.")
                 with d:
                     if st.button("Deactivate" if active else "Activate", key=f"tgl_{u['id']}"):
                         rls_client.table("users").update({"active": not active}).eq("id", u["id"]).execute()
-                        if active:
-                            rls_client.table("sessions").delete().eq("email", u["email"]).execute()
+                        if active: rls_client.table("sessions").delete().eq("email", u["email"]).execute()
                         st.rerun()
                 e, f = st.columns([1.1, 1])
                 tiers = ["Staff", "Basic", "Pro", "Max", "Admin"]
                 cur_tier = u.get("tier", "Staff")
-                with e:
-                    new_tier = st.selectbox("Change plan", tiers, index=tiers.index(cur_tier) if cur_tier in tiers else 0, key=f"plan_{u['id']}", label_visibility="collapsed")
+                with e: new_tier = st.selectbox("Change plan", tiers, index=tiers.index(cur_tier) if cur_tier in tiers else 0, key=f"plan_{u['id']}", label_visibility="collapsed")
                 with f:
                     if st.button("Change Plan", key=f"chg_{u['id']}", disabled=(new_tier == cur_tier)):
                         rls_client.table("users").update({"tier": new_tier}).eq("id", u["id"]).execute()
-                        st.success(f"{safe_str(u.get('name'))} moved to {new_tier}.")
-                        st.rerun()
-                        
+                        st.success(f"{safe_str(u.get('name'))} moved to {new_tier}."); st.rerun()
     elif section == "🏢 Org Settings":
         st.subheader("Departments")
         st.caption("Shown as dropdown choices on the signup form — one per line.")
@@ -1366,7 +1163,6 @@ def show_admin(user, rls_client):
             set_setting("departments", ";".join(x.strip() for x in depts_in.splitlines() if x.strip()))
             set_setting("offices", ";".join(x.strip() for x in offs_in.splitlines() if x.strip()))
             st.success("Saved. New signups will see the updated lists.")
-            
     elif section == "📢 Document Publisher":
         st.subheader("Publish new circular / G.O.")
         source = st.radio("Document source", ["Upload PDF", "Paste a link"], horizontal=True)
@@ -1379,12 +1175,10 @@ def show_admin(user, rls_client):
             with b:
                 tt = st.text_input("Title / Subject *")
                 cat = st.selectbox("Category", ["Finance / HR", "Operations", "Confidential", "Executive"])
-                tier = st.selectbox("Minimum Tier required to view", ["Basic", "Pro", "Max"])
+                tier = st.selectbox("Minimum Tier", ["Basic", "Pro", "Max"])
                 sup_ = st.text_input("Supersedes / Amends")
-                
             up = st.file_uploader("PDF file (max 20 MB)", type=["pdf"]) if source == "Upload PDF" else None
             lk = st.text_input("External PDF / Drive URL") if source == "Paste a link" else ""
-            
             if st.form_submit_button("Publish Document", type="primary", use_container_width=True):
                 ref_id = f"{dt} {rn}".strip()
                 errs = []
@@ -1395,54 +1189,34 @@ def show_admin(user, rls_client):
                 if source == "Upload PDF" and up is None: errs.append("Choose a PDF.")
                 if source == "Paste a link" and not lk.strip(): errs.append("Paste a document link.")
                 if source == "Paste a link" and lk.strip() and not is_safe_url(lk): errs.append("Link must start with http:// or https://")
-                
                 if errs:
                     for e in errs: st.warning(e)
                 else:
                     if source == "Upload PDF":
                         with tempfile.SpooledTemporaryFile(max_size=MAX_UPLOAD_MB * 1024 * 1024) as tmp:
-                            chunk_size, total_size = 65536, 0
+                            chunk_size = 65536; total_size = 0
                             while True:
                                 chunk = up.read(chunk_size)
                                 if not chunk: break
-                                tmp.write(chunk)
-                                total_size += len(chunk)
-                                if total_size > MAX_UPLOAD_MB * 1024 * 1024:
-                                    st.error("File too large.")
-                                    return
-                            tmp.seek(0)
-                            header = tmp.read(5)
-                            if header != b"%PDF-":
-                                st.error("This isn't a valid PDF (failed file-signature check).")
-                                return
-                            tmp.seek(0)
-                            fb = tmp.read()
-                            
+                                tmp.write(chunk); total_size += len(chunk)
+                                if total_size > MAX_UPLOAD_MB * 1024 * 1024: st.error("File too large."); return
+                            tmp.seek(0); header = tmp.read(5)
+                            if header != b"%PDF-": st.error("This isn't a valid PDF."); return
+                            tmp.seek(0); fb = tmp.read()
                         safe_name = f"{dt.replace('.','').replace(' ','')}_{rn.strip().replace(' ','').replace('/','-')}_{dd.isoformat()}.pdf"
                         st.session_state.processing_status = None
                         thread = threading.Thread(target=process_pdf_background, args=(fb, safe_name, dd, rn, cat, user["email"], ref_id, dt, tt, tier, sup_))
                         thread.start()
                         with st.spinner("Processing PDF in background... Please wait."):
-                            while st.session_state.processing_status is None:
-                                time.sleep(0.5)
+                            while st.session_state.processing_status is None: time.sleep(0.5)
                         status = st.session_state.processing_status
                         if status["success"]:
                             st.success(f"Published: {status['ref_id']} · AI blocks: {status['blocks']}")
-                            fetch_circulars.clear()
-                            st.rerun()
-                        else:
-                            st.error(f"Processing failed: {status['error']}")
+                            fetch_circulars.clear(); st.rerun()
+                        else: st.error(f"Processing failed: {status['error']}")
                     elif source == "Paste a link":
-                        rls_client.table("circulars").insert({
-                            "ref_id": ref_id, "doc_type": dt, "ref_number": rn.strip(), 
-                            "doc_date": dd.isoformat(), "title": tt.strip(), "category": cat, 
-                            "tier_required": tier, "link": lk.strip(), "supersedes": sup_.strip() or None, 
-                            "uploaded_by": user["email"], "uploaded_at": now_utc().isoformat()
-                        }).execute()
-                        st.success(f"Published link: {ref_id}")
-                        fetch_circulars.clear()
-                        st.rerun()
-                        
+                        rls_client.table("circulars").insert({"ref_id": ref_id, "doc_type": dt, "ref_number": rn.strip(), "doc_date": dd.isoformat(), "title": tt.strip(), "category": cat, "tier_required": tier, "link": lk.strip(), "supersedes": sup_.strip() or None, "uploaded_by": user["email"], "uploaded_at": now_utc().isoformat()}).execute()
+                        st.success(f"Published link: {ref_id}"); fetch_circulars.clear(); st.rerun()
     elif section == "📝 Letter Templates":
         st.subheader("Manage Institutional Letter Templates")
         st.caption("Create standardized templates with placeholders like {{DATE}}, {{TO_ADDRESS}}, etc.")
@@ -1452,33 +1226,23 @@ def show_admin(user, rls_client):
             tdesc = st.text_area("Description", height=80)
             tcontent = st.text_area("Template Content *", height=200, placeholder="Dear {{RECIPIENT}},\n\nThis is to inform you that {{SUBJECT}}.\n\nDate: {{DATE}}\n\nYours faithfully,\n{{SENDER_NAME}}\n{{SENDER_DESIGNATION}}")
             if st.form_submit_button("Publish Template", type="primary", use_container_width=True):
-                if not tname.strip() or not tcontent.strip():
-                    st.warning("Name and content are required.")
+                if not tname.strip() or not tcontent.strip(): st.warning("Name and content are required.")
                 else:
-                    rls_client.table("letter_templates").insert({
-                        "name": tname.strip(), "category": tcat, "description": tdesc.strip(),
-                        "content": tcontent.strip(), "created_by": user["email"], "created_at": now_utc().isoformat()
-                    }).execute()
-                    fetch_letter_templates.clear()
-                    st.success("Template published!")
-                    st.rerun()
+                    rls_client.table("letter_templates").insert({"name": tname.strip(), "category": tcat, "description": tdesc.strip(), "content": tcontent.strip(), "created_by": user["email"], "created_at": now_utc().isoformat()}).execute()
+                    fetch_letter_templates.clear(); st.success("Template published!"); st.rerun()
         st.divider()
         st.subheader("Existing Templates")
         templates = fetch_letter_templates(rls_client)
-        if not templates:
-            st.info("No templates yet.")
+        if not templates: st.info("No templates yet.")
         else:
             for t in templates:
                 with st.container(border=True):
                     st.markdown(f"**{t['name']}** ({t.get('category', 'General')})")
                     st.caption(t.get('description', ''))
-                    with st.expander("View content"):
-                        st.code(t['content'])
+                    with st.expander("View content"): st.code(t['content'])
                     if st.button("Delete", key=f"del_tmpl_{t['id']}"):
                         rls_client.table("letter_templates").delete().eq("id", t["id"]).execute()
-                        fetch_letter_templates.clear()
-                        st.rerun()
-                        
+                        fetch_letter_templates.clear(); st.rerun()
     elif section == "🔧 AI & Gateway Settings":
         st.subheader("AI provider configuration")
         cur = get_setting("ai_provider", "gemini")
@@ -1489,19 +1253,16 @@ def show_admin(user, rls_client):
         k = st.text_input(f"{name} API Key", value="", type="password", placeholder="•••••••••••• (leave blank to keep existing)")
         m = st.text_input("Model", value=get_setting(f"{prov}_model", dm))
         ep = st.text_input("Base URL", value=get_setting(f"{prov}_endpoint", de), disabled=(kind == "gemini"))
-        
         if st.button("Save Gateway", type="primary"):
             set_setting("ai_provider", prov)
             if k.strip(): set_setting(f"{prov}_api_key", encrypt_secret(k.strip()))
             set_setting(f"{prov}_model", m.strip())
             set_setting(f"{prov}_endpoint", ep.strip())
             st.success("Saved. All users now use this engine by default.")
-            
         if st.button("🧪 Test provider"):
             test_key = k.strip() or decrypt_secret(get_setting(f"{prov}_api_key"))
             r, e = _call_one(prov, test_key, m.strip(), ep.strip(), "Reply exactly: AI gateway connection OK", "You are a connection test.")
             st.error(e) if e else st.success(r)
-            
         st.divider()
         st.subheader("Subscription pricing (₹)")
         a, b = st.columns(2)
@@ -1512,28 +1273,23 @@ def show_admin(user, rls_client):
             mm = st.number_input("Max Monthly", 0, 100000, int(get_setting("max_monthly", "799")))
             my_ = st.number_input("Max Yearly", 0, 1000000, int(get_setting("max_yearly", "9588")))
         if st.button("Save Pricing", type="primary"):
-            for kk, vv in [("pro_monthly", pm), ("pro_yearly", py_), ("max_monthly", mm), ("max_yearly", my_)]:
-                set_setting(kk, str(int(vv)))
+            for kk, vv in [("pro_monthly", pm), ("pro_yearly", py_), ("max_monthly", mm), ("max_yearly", my_)]: set_setting(kk, str(int(vv)))
             st.success("Pricing saved.")
-            
     elif section == "🩺 Health & Diagnostics":
         st.subheader("System health")
         n_users = rls_client.table("users").select("id", count="exact", head=True).execute().count or 0
         n_circ = rls_client.table("circulars").select("id", count="exact", head=True).execute().count or 0
         prov = get_setting("ai_provider", "gemini")
         key_ok = bool(get_setting(f"{prov}_api_key") or secret(f"{prov.upper()}_API_KEY"))
-        
         a, b, c, d = st.columns(4)
         a.markdown(f"<div class='kpi-card'><div class='kpi-label'>Total users</div><div class='kpi-value'>{n_users}</div></div>", unsafe_allow_html=True)
         b.markdown(f"<div class='kpi-card'><div class='kpi-label'>Circulars</div><div class='kpi-value'>{n_circ}</div></div>", unsafe_allow_html=True)
         c.markdown(f"<div class='kpi-card'><div class='kpi-label'>AI engine</div><div class='kpi-value' style='font-size:20px;'>{PROVIDERS.get(prov, PROVIDERS['gemini'])[0]}</div></div>", unsafe_allow_html=True)
         d.markdown(f"<div class='kpi-card'><div class='kpi-label'>Status</div><div class='kpi-value' style='font-size:20px;color:{'#15803D' if key_ok else '#B91C1C'};'>{'Healthy' if key_ok else 'Attention'}</div></div>", unsafe_allow_html=True)
-        
         st.divider()
         st.subheader("Recent errors")
         errs = rls_client.table("error_log").select("*").order("occurred_at", desc=True).limit(30).execute().data or []
-        if not errs:
-            st.success("No errors logged. Everything is running clean.")
+        if not errs: st.success("No errors logged. Everything is running clean.")
         else:
             for e in errs:
                 with st.container(border=True):
@@ -1543,56 +1299,38 @@ def show_admin(user, rls_client):
                 rls_client.table("error_log").delete().in_("id", [e["id"] for e in errs]).execute()
                 st.rerun()
 
-def show_welcome(user):
-    hide_cloud_chrome()
-    st.markdown('<div class="login-shell">', unsafe_allow_html=True)
-    _, c2, _ = st.columns([1, 1.2, 1])
-    with c2:
-        with st.container(border=True):
-            st.markdown("### Welcome to GovDocs AI 👋")
-            st.caption("Your account is ready.")
-            st.markdown(f"| | |\n|---|---|\n| Account | 🟢 Active |\n| Plan | 🟢 {esc(user.get('tier','Basic'))} — Free |\n| Email | 🟢 Verified |\n| Department | {esc(user.get('department') or '—')} |\n")
-            if st.button("Enter Staff Workspace →", type="primary", use_container_width=True):
-                st.session_state["show_welcome"] = False
-                st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# --- ROUTER ---
+# --- MAIN ROUTER ---
 try_auto_login()
 
-if not st.session_state.logged_in:
-    hide_cloud_chrome()
-    show_login()
+if not st.session_state.logged_in: show_login()
 else:
     user = st.session_state.user
-    if user.get("tier") == "Admin": show_full_chrome()
-    else: hide_cloud_chrome()
-        
-    if st.session_state.get("show_welcome"):
-        show_welcome(user)
-        st.stop()
-        
-    # Get the secure client scoped to this user
     rls_client = get_user_supabase_client(user["email"])
     
-    menu = render_sidebar(user)
+    with st.sidebar:
+        st.markdown('<div class="sidebar-brand"><div class="sidebar-logo">🏛️</div><div><div class="sidebar-brand-title">RTA Workspace</div><div class="sidebar-brand-sub">AP Govt Edition</div></div></div>', unsafe_allow_html=True)
+        office = safe_str(user.get("department"))
+        extra = f"<div class='profile-email'>{esc(office)}</div>" if office else ""
+        st.markdown(f'<div class="profile-card"><div class="profile-name">{esc(user.get("name"))}</div><div class="profile-email">{esc(user.get("email"))}</div>{extra}<div class="profile-role"><span style="font-size:10px;color:#64748B;">Access tier</span>{tier_badge(user.get("tier", "Staff"))}</div></div>', unsafe_allow_html=True)
+        options = ["🏠 Dashboard", "📢 Circulars & G.O.s", "🤖 AI Rules Assistant", "📝 Templates", "✉️ Smart Tapal", "🤝 GovConnect", "📮 Dispatch Labels", "📞 Staff Directory", "💳 Plans & Billing"]
+        if user.get("tier") == "Admin": options.append("⚙️ Admin Command Center")
+        menu = st.radio("Navigation", options, label_visibility="collapsed")
+        if st.button("🚪 Logout", use_container_width=True):
+            clear_session_token(read_session_cookie())
+            st.session_state.logged_in = False
+            st.session_state.user = None
+            st.session_state.messages = []
+            st.rerun()
+            
     topbar(user)
     
-    if menu == "🏠 Dashboard":
-        show_home(user, rls_client)
-    elif menu == "📢 Circulars & G.O.s":
-        show_circulars(user, rls_client)
-    elif menu == "🤖 AI Rules Assistant":
-        show_ai(user)
-    elif menu == "📝 Templates":
-        show_templates(user, rls_client)
-    elif menu == "✉️ Smart Tapal Register":
-        show_tapal(user, rls_client)
-    elif menu == "📮 Dispatch Labels":
-        show_dispatch(user)
-    elif menu == "📞 Staff Directory":
-        show_directory(user, rls_client)
-    elif menu == "💳 Plans & Billing":
-        show_billing(user)
-    elif menu == "⚙️ Admin Command Center":
-        show_admin(user, rls_client)
+    if menu == "🏠 Dashboard": show_home(user, rls_client)
+    elif menu == "📢 Circulars & G.O.s": show_circulars(user, rls_client)
+    elif menu == "🤖 AI Rules Assistant": show_ai(user)
+    elif menu == "📝 Templates": show_templates(user, rls_client)
+    elif menu == "✉️ Smart Tapal": show_tapal(user, rls_client)
+    elif menu == "🤝 GovConnect": show_govconnect(user, rls_client)
+    elif menu == "📮 Dispatch Labels": show_dispatch(user)
+    elif menu == "📞 Staff Directory": show_directory(user, rls_client)
+    elif menu == "💳 Plans & Billing": show_billing(user)
+    elif menu == "⚙️ Admin Command Center": show_admin(user, rls_client)
