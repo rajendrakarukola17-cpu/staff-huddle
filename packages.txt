@@ -1,3 +1,8 @@
+liblzma-dev
+libbz2-dev
+zlib1g-dev
 tesseract-ocr
 tesseract-ocr-tel
-libgl1
+tesseract-ocr-hin
+tesseract-ocr-eng
+poppler-utils
