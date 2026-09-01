@@ -1,18 +1,18 @@
-# 🏛️ RTA Connect - Production Deployment Guide
+# RTA Connect Deployment
 
-## 1. Database Setup
-1. Go to Supabase Dashboard → SQL Editor.
-2. Copy the entire contents of `schema.sql` and run it.
-3. Enable Auth → Email confirmation (or disable for internal testing).
+## 1. Setup Cloud Services
+- Supabase: https://supabase.com
+- Upstash Redis: https://upstash.com
+- Cloudflare R2: https://cloudflare.com
+- Backblaze B2: https://backblaze.com
+- Qdrant: https://qdrant.tech
+- Google AI: https://makersuite.google.com
 
-## 2. Storage Setup
-1. Go to Supabase → Storage.
-2. Create a bucket named `rta-documents`.
-3. Set Bucket Policy to allow authenticated reads/writes.
+## 2. Run Schema
+Execute schema.sql in Supabase SQL Editor
 
-## 3. Local Development
-```bash
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-streamlit run app.py
+## 3. Configure Secrets
+Fill .streamlit/secrets.toml with your keys
+
+## 4. Deploy
+git push to GitHub → Deploy on Streamlit Cloud
