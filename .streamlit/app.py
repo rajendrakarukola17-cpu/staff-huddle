@@ -1050,6 +1050,7 @@ def check_password(p, h):
 def get_user(email):
     if redis_client:
         try:
+            # Changed to user_v2 to bust old broken cache
             c = redis_client.get(f"user_v2:{email}")
             if c:
                 return json.loads(c)
@@ -1057,18 +1058,19 @@ def get_user(email):
             pass
     if supabase:
         try:
-            r = supabase.table("user_v2").select(
-                "id, email, name, password_hash, office_code, office_name, designation, section, seat_number, admin_level, active"
+            # Added password_hash to the select list
+            r = supabase.table("users").select(
+                "id, email, name, office_code, office_name, designation, section, seat_number, admin_level, active, password_hash"
             ).eq("email", email).execute()
             if r.data:
                 u = r.data[0]
                 if redis_client:
-                    redis_client.setex(f"user:{email}", 3600, json.dumps(u, default=str))
+                    # Changed to user_v2 to bust old broken cache
+                    redis_client.setex(f"user_v2:{email}", 3600, json.dumps(u, default=str))
                 return u
         except Exception:
             pass
     return None
-
 def login_rate_limited(email):
     """Check-only: report whether this email is currently rate limited, without counting this check as an attempt."""
     if redis_client:
