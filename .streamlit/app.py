@@ -1240,7 +1240,7 @@ def show_login():
         email = st.text_input("Email", key="login_email").strip().lower()
         password = st.text_input("Password", type="password", key="login_password")
         
-        if st.button("Sign In", use_container_width=True):
+                if st.button("Sign In", use_container_width=True):
             if not email or not password:
                 show_toast("Enter email and password", "warning")
             elif not validate_email(email):
@@ -1249,11 +1249,8 @@ def show_login():
                 show_toast("Too many attempts. Try again later.", "error")
             else:
                 u = get_user(email)
-                               if u and check_password(password, u.get("password_hash", "")):
-                    if not u.get("active", True):
-                        show_toast("Your account has been deactivated. Contact an admin.", "error")
-                    else:
-                        do_login(u)
+                if u and check_password(password, u.get("password_hash", "")):
+                    do_login(u)
                 else:
                     increment_login_attempt(email)
                     show_toast("Invalid credentials", "error")
