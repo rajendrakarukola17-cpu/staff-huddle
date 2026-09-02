@@ -1,6 +1,3 @@
-# Only needed if you uncomment the OCR block in requirements.txt.
-# Streamlit Community Cloud reads this file and apt-get installs these
-# system packages before your app starts.
-# tesseract-ocr
-# tesseract-ocr-tel
-# poppler-utils
+poppler-utils
+tesseract-ocr
+tesseract-ocr-eng
