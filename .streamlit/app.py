@@ -2620,7 +2620,8 @@ def show_login():
     if not has_any_user():
         show_initial_admin_setup()
         st.divider()
-            with st.sidebar:
+
+    with st.sidebar:
         if st.button("🔄 Clear Session & Retry", key="clear_stuck_session"):
             st.session_state.clear()
             try:
@@ -2628,7 +2629,7 @@ def show_login():
             except Exception:
                 pass
             st.rerun()
-            
+
     quotes = [
         {
             "text": "Service to the public is service to the nation",
