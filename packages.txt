@@ -1,8 +1,6 @@
-liblzma-dev
-libbz2-dev
-zlib1g-dev
-tesseract-ocr
-tesseract-ocr-tel
-tesseract-ocr-hin
-tesseract-ocr-eng
-poppler-utils
+# Only needed if you uncomment the OCR block in requirements.txt.
+# Streamlit Community Cloud reads this file and apt-get installs these
+# system packages before your app starts.
+# tesseract-ocr
+# tesseract-ocr-tel
+# poppler-utils
