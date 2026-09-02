@@ -1,38 +1,3 @@
-"""
-RTA ANUBANDHAN — Complete Enterprise Production
-Government Workspace Platform for Andhra Pradesh Transport Department
-
-FEATURES:
-- Sentry Error Tracking
-- Redis Caching (user, feed, AI responses)
-- Audit Logging (tamper-evident)
-- Content-Addressed Deduplication
-- Zstandard + LZMA Compression
-- Auto-Tiering (R2 hot / B2 cold / MinIO self-hosted)
-- Qdrant Vector Database (auto-collection)
-- Circuit Breakers for AI APIs
-- Semantic Caching (exact + embedding)
-- Connection Pooling (Supabase)
-- Background Processing (threaded with status tracking)
-- OCR (PDF + Image with page limit)
-- Agentic Web Search (Serper.dev)
-- Multi-Provider AI (Gemini → OpenAI → Anthropic)
-- Rate Limiting (Redis + Supabase fallback)
-- Session Management (7-day expiry)
-- Filename Sanitization
-- Toast Notifications
-- Empty States
-- Upload Progress Bars
-- Fuzzy Search (thefuzz)
-- Form Auto-Save (JavaScript)
-- @st.fragment for Document Cards
-- 8-Tab Admin Panel (Health, Users, Storage, Maintenance, Audit, Emergency, Announcements, Analytics)
-- Maintenance Mode
-- Bulk User Import
-- Error Log Viewer
-- Scheduled Tasks UI
-"""
-
 import streamlit as st
 import streamlit.components.v1 as components
 from supabase import create_client, Client
@@ -70,7 +35,6 @@ try:
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
-    logger.warning("Redis not available - caching disabled")
 
 try:
     import boto3
@@ -148,7 +112,7 @@ except ImportError:
     FUZZY_AVAILABLE = False
 
 # ============================================
-# SENTRY INITIALIZATION (Module level)
+# SENTRY INITIALIZATION
 # ============================================
 if SENTRY_AVAILABLE and os.getenv("SENTRY_DSN"):
     sentry_sdk.init(
@@ -163,7 +127,7 @@ if SENTRY_AVAILABLE and os.getenv("SENTRY_DSN"):
 # ============================================
 st.set_page_config(page_title="RTA Anubandhan", page_icon="🏛️", layout="wide", initial_sidebar_state="collapsed")
 
-# Anti-screenshot JS + Form Autosave
+# Anti-screenshot + Form Autosave
 components.html("""
 <script>
 const parentDoc = window.parent.document;
@@ -174,7 +138,6 @@ parentDoc.addEventListener('keyup', (e) => {
         parentDoc.body.innerHTML = '<h1 style="color:red;text-align:center;margin-top:20%;">SECURITY VIOLATION LOGGED</h1>';
     }
 });
-
 setInterval(() => {
     const inputs = parentDoc.querySelectorAll('input:not([type="password"]), textarea');
     const formData = {};
@@ -183,7 +146,6 @@ setInterval(() => {
     });
     localStorage.setItem('rta_form_autosave', JSON.stringify(formData));
 }, 2000);
-
 window.addEventListener('load', () => {
     const saved = localStorage.getItem('rta_form_autosave');
     if (saved) {
@@ -211,7 +173,7 @@ CUSTOM_CSS = """
     --shadow-md: 0 8px 24px rgba(0,0,0,0.08);
 }
 body, .stApp { background-color: var(--bg-canvas) !important; font-family: 'Inter', sans-serif !important; color: var(--text-primary) !important; }
-#MainMenu, footer, header, [data-testid="stDecoration"], [data-testid="stStatusWidget"] { visibility: hidden !important; display: none !important; }
+#MainMenu, footer, header { visibility: hidden !important; display: none !important; }
 .block-container { padding-top: 1rem !important; padding-bottom: 100px !important; max-width: 1200px; }
 .commercial-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
 .post-avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 700; }
@@ -344,6 +306,28 @@ class CircuitBreaker:
             raise
 
 # ============================================
+# BUSINESS METRICS (RESTORED)
+# ============================================
+class BusinessMetrics:
+    def __init__(self):
+        self.metrics = {
+            "documents_uploaded": 0,
+            "documents_downloaded": 0,
+            "ai_queries_total": 0,
+            "ai_queries_cached": 0,
+            "active_users": set(),
+        }
+    
+    def increment(self, metric, value=1):
+        if metric in self.metrics:
+            if isinstance(self.metrics[metric], int):
+                self.metrics[metric] += value
+            elif isinstance(self.metrics[metric], set):
+                self.metrics[metric].add(value)
+
+business_metrics = BusinessMetrics()
+
+# ============================================
 # CLOUD INITIALIZATION
 # ============================================
 @st.cache_resource
@@ -360,9 +344,8 @@ def init_supabase():
                 "persist_session": True,
                 "detect_session_in_url": False,
             })
-    except Exception as e:
-        logger.error(f"Supabase init failed: {e}")
-    return None
+    except:
+        return None
 
 @st.cache_resource
 def init_redis():
@@ -534,6 +517,7 @@ class StorageSystem:
                         "original_filename": filename, "created_at": now_utc().isoformat()
                     }).execute()
                     audit_log(user_email, "document.duplicate", "document", ref_id)
+                    business_metrics.increment("documents_uploaded")
                     return {'success': True, 'duplicate': True, 'document_id': ref_id,
                             'message': f"File exists. Saved {len(file_data)/1024/1024:.2f} MB"}
 
@@ -567,6 +551,7 @@ class StorageSystem:
                     doc_id = result.data[0]['id']
 
             audit_log(user_email, "document.upload", "document", doc_id, {"filename": filename})
+            business_metrics.increment("documents_uploaded")
 
             def bg_task(did, text, fn):
                 try:
@@ -637,6 +622,7 @@ class StorageSystem:
                 count = doc.get("access_count", 0) or 0
                 supabase.table("documents").update({"access_count": count+1, "last_accessed": now_utc().isoformat()}).eq("id", document_id).execute()
             except: pass
+            business_metrics.increment("documents_downloaded")
             return decompress_data(decrypt_data(data), doc.get("compression_method", "none"))
         except: return None
 
@@ -657,6 +643,9 @@ class StorageSystem:
 
 storage_system = StorageSystem()
 
+# ============================================
+# AUTO-TIERING (RESTORED)
+# ============================================
 def auto_tier_documents():
     if not supabase: return {'error': 'Supabase unavailable'}
     try:
@@ -733,17 +722,22 @@ class MultiAI:
         return None
 
     def request(self, prompt):
+        business_metrics.increment("ai_queries_total")
         h = hashlib.md5(prompt.encode()).hexdigest()
         if redis_client:
             try:
                 c = redis_client.get(f"ai_cache:{h}")
-                if c: return {'success': True, 'response': json.loads(c), 'provider': 'cache'}
+                if c:
+                    business_metrics.increment("ai_queries_cached")
+                    return {'success': True, 'response': json.loads(c), 'provider': 'cache'}
             except: pass
         if qdrant_client:
             try:
                 hits = qdrant_client.search(collection_name="ai_semantic_cache",
                     query_vector=generate_embedding(prompt), limit=1, score_threshold=0.90)
-                if hits: return {'success': True, 'response': hits[0].payload['response'], 'provider': 'semantic_cache'}
+                if hits:
+                    business_metrics.increment("ai_queries_cached")
+                    return {'success': True, 'response': hits[0].payload['response'], 'provider': 'semantic_cache'}
             except: pass
         for p in self.providers:
             try:
@@ -771,6 +765,9 @@ class MultiAI:
 
 ai_system = MultiAI()
 
+# ============================================
+# AGENTIC WEB SEARCH
+# ============================================
 def agentic_web_search(query, stype="gov"):
     key = secret("SERPER_API_KEY")
     if not key: return ""
@@ -782,6 +779,9 @@ def agentic_web_search(query, stype="gov"):
         return "".join([f"Source: {x.get('link')}\nSnippet: {x.get('snippet')}\n\n" for x in r.json().get("organic", [])])
     except: return ""
 
+# ============================================
+# VECTOR EMBEDDING
+# ============================================
 def generate_embedding(text):
     dim = 384
     key = secret("GEMINI_EMBEDDING_KEY") or secret("GEMINI_API_KEY")
@@ -821,7 +821,7 @@ def search_documents(query, limit=10):
         try:
             return supabase.table("documents").select("id, filename, file_key, storage_tier, doc_type, ai_summary, uploaded_at").ilike("filename", f"%{q}%").limit(limit).execute().data or []
         except: pass
-    return []
+    return [] 
 
 # ============================================
 # AUTHENTICATION
@@ -909,6 +909,7 @@ def do_login(u):
             cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS*24*3600)
         except: pass
     audit_log(u["email"], "user.login", "user", None)
+    business_metrics.increment("active_users", u["email"])
     st.rerun()
 
 def logout():
@@ -924,6 +925,49 @@ def logout():
     st.session_state.clear()
     cookies.delete(COOKIE_NAME)
     st.rerun()
+
+# ============================================
+# SHOW SYSTEM HEALTH (RESTORED)
+# ============================================
+def show_system_health():
+    st.markdown("### 🩺 System Health Check")
+    cols = st.columns(3)
+    with cols[0]:
+        try:
+            supabase.table("users").select("id").limit(1).execute()
+            st.success("✅ Supabase: Connected")
+        except: st.error("❌ Supabase: Down")
+    with cols[1]:
+        storage_status = []
+        if r2_client:
+            try: r2_client.list_buckets(); storage_status.append("✅ R2")
+            except: storage_status.append("❌ R2")
+        if b2_client:
+            try: b2_client.list_buckets(); storage_status.append("✅ B2")
+            except: storage_status.append("❌ B2")
+        if minio_client:
+            try: minio_client.list_buckets(); storage_status.append("✅ MinIO")
+            except: storage_status.append("❌ MinIO")
+        st.info("Storage: " + " | ".join(storage_status) or "❌ None")
+    with cols[2]:
+        try:
+            if qdrant_client: qdrant_client.get_collections(); st.success("✅ Qdrant: Connected")
+            else: st.warning("⚠️ Qdrant: Disabled")
+        except: st.error("❌ Qdrant: Down")
+
+# ============================================
+# GET OFFICE DIRECTORY (RESTORED)
+# ============================================
+def get_office_directory(office_code):
+    worker_url = secret("CF_WORKER_URL", "")
+    if worker_url:
+        try:
+            resp = requests.get(f"{worker_url}/directory", params={"office": office_code}, timeout=2)
+            if resp.status_code == 200: return resp.json()
+        except: pass
+    try:
+        return supabase.table("users").select("name, designation, section, seat_number").eq("office_code", office_code).execute().data or []
+    except: return []
 
 # ============================================
 # UI PAGES
@@ -956,7 +1000,6 @@ def show_feed():
     st.markdown(f"### {g}, {u.get('name','User')}!")
     st.caption(f"📍 {u.get('office_name','Office')} | {u.get('designation','Staff')}")
     
-    # Show announcements
     if supabase:
         try:
             anns = supabase.table("announcements").select("*").gt("expires_at", now_utc().isoformat()).order("created_at", desc=True).limit(3).execute().data or []
@@ -1106,19 +1149,7 @@ def show_admin():
     with tabs[0]:
         st.markdown("#### 🩺 Health")
         if st.button("Check Health", key="hcheck"):
-            c = st.columns(4)
-            with c[0]:
-                try: supabase.table("users").select("id").limit(1).execute(); st.success("Supabase")
-                except: st.error("Supabase")
-            with c[1]:
-                try: r2_client.list_buckets(); st.success("R2")
-                except: st.error("R2")
-            with c[2]:
-                try: qdrant_client.get_collections(); st.success("Qdrant")
-                except: st.error("Qdrant")
-            with c[3]:
-                try: redis_client.ping(); st.success("Redis")
-                except: st.error("Redis")
+            show_system_health()
         st.divider()
         st.markdown("#### 📜 Recent Errors")
         if supabase:
@@ -1286,7 +1317,6 @@ def render_bottom_nav():
 # MAIN
 # ============================================
 def main():
-    # Maintenance mode check
     if redis_client:
         try:
             if redis_client.get("maintenance_mode") == "1":
