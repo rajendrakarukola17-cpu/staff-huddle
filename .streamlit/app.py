@@ -35,7 +35,7 @@ except Exception:
     SUPABASE_LIB = False
 
 try:
-    from streamlit_cookies_controller import CookieController
+    try:     from streamlit_cookies_controller import CookieController except Exception:     CookieController = None
     COOKIES_LIB = True
 except Exception:
     CookieController = None
