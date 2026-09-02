@@ -2620,6 +2620,14 @@ def show_login():
     if not has_any_user():
         show_initial_admin_setup()
         st.divider()
+            with st.sidebar:
+        if st.button("🔄 Clear Session & Retry", key="clear_stuck_session"):
+            st.session_state.clear()
+            try:
+                cookies.delete(COOKIE_NAME)
+            except Exception:
+                pass
+            st.rerun()
 
     quotes = [
         {
