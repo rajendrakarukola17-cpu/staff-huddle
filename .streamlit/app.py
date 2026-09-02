@@ -1249,7 +1249,7 @@ def show_login():
                 show_toast("Too many attempts. Try again later.", "error")
             else:
                 u = get_user(email)
-                if u and check_password(password, u.get("password_hash", "")):
+                               if u and check_password(password, u.get("password_hash", "")):
                     if not u.get("active", True):
                         show_toast("Your account has been deactivated. Contact an admin.", "error")
                     else:
