@@ -4225,7 +4225,27 @@ def show_admin():
 # ============================================================
 # NAVIGATION
 # ============================================================
-def render_sidebar_nav():
+def render_back_button():
+    if "sidebar_open" not in st.session_state:
+        st.session_state.sidebar_open = True
+
+    col1, col2, col3 = st.columns([2, 2, 2])
+
+    with col1:
+        if st.session_state.get("page", "feed") != "feed":
+            if st.button("⬅️ Back to Dashboard", key=f"back_{st.session_state.get('page', 'main')}"):
+                st.session_state.page = "feed"
+                st.rerun()
+
+    with col2:
+        if st.session_state.sidebar_open:
+            if st.button("🙈 Hide Sidebar", key="hide_sidebar_from_page"):
+                st.session_state.sidebar_open = False
+                st.rerun()
+        else:
+            if st.button("☰ Show Sidebar", key="show_sidebar_from_page"):
+                st.session_state.sidebar_open = True
+                st.rerun()
     u = st.session_state.user or {}
 
     with st.sidebar:
