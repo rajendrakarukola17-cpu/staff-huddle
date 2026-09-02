@@ -1240,7 +1240,7 @@ def show_login():
         email = st.text_input("Email", key="login_email").strip().lower()
         password = st.text_input("Password", type="password", key="login_password")
         
-                if st.button("Sign In", use_container_width=True):
+        if st.button("Sign In", use_container_width=True):
             if not email or not password:
                 show_toast("Enter email and password", "warning")
             elif not validate_email(email):
