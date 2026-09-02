@@ -1,18 +1,17 @@
 """
-RTA ANUBANDHAN — UPDATED FINAL APP
-PART 1/3
+RTA ANUBANDHAN — FINAL CLEAN UPDATED APP
+PART 1/4
 
-Features included:
-- Fixed syntax errors
+Includes:
+- Safe imports
 - Safe cookie handling
-- Settings management for Admin-controlled AI keys
-- AI Training links helpers
+- Admin settings helpers
+- AI training link helpers
+- Back/sidebar helpers
+- Cloud initialization
 - B2 via boto3
-- Two-tier storage logic
-- Compression / encryption
+- Compression engine
 - Local fallback storage
-- Audit logging
-- Storage system with deduplication
 """
 
 import streamlit as st
@@ -344,15 +343,6 @@ body, .stApp {
     max-width: 1200px;
 }
 
-.commercial-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px;
-    margin-bottom: 16px;
-    box-shadow: var(--shadow-sm);
-}
-
 .login-container {
     max-width: 450px;
     margin: 40px auto;
@@ -496,9 +486,11 @@ def sanitize_filename(filename: str) -> str:
 def get_fernet():
     if not CRYPTO_AVAILABLE:
         return None
+
     key = secret("ENCRYPTION_KEY", "")
     if not key:
         return None
+
     key_bytes = hashlib.sha256(key.encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(key_bytes))
 
@@ -549,6 +541,7 @@ def log_error(error_type, message):
     sb = globals().get("supabase")
     if not sb:
         return
+
     try:
         sb.table("audit_logs").insert(
             {
@@ -608,6 +601,7 @@ class BusinessMetrics:
     def increment(self, metric, value=1):
         if metric not in self.metrics:
             return
+
         if isinstance(self.metrics[metric], int):
             self.metrics[metric] += value
         elif isinstance(self.metrics[metric], set):
@@ -623,13 +617,16 @@ business_metrics = BusinessMetrics()
 def init_supabase():
     if not SUPABASE_LIB:
         return None
+
     try:
         url = secret("SUPABASE_URL")
         key = secret("SUPABASE_KEY")
+
         if url and key:
             return create_client(url, key)
     except Exception as e:
         logger.error(f"Supabase init failed: {e}")
+
     return None
 
 
@@ -637,13 +634,16 @@ def init_supabase():
 def init_redis():
     if not REDIS_AVAILABLE:
         return None
+
     try:
         url = secret("UPSTASH_REDIS_REST_URL")
         token = secret("UPSTASH_REDIS_REST_TOKEN")
+
         if url and token:
             return Redis(url=url, token=token)
     except Exception as e:
         logger.error(f"Redis init failed: {e}")
+
     return None
 
 
@@ -651,12 +651,15 @@ def init_redis():
 def init_r2():
     if not BOTO_AVAILABLE:
         return None
+
     try:
         account_id = secret("R2_ACCOUNT_ID")
         access_key = secret("R2_ACCESS_KEY_ID")
         secret_key = secret("R2_SECRET_ACCESS_KEY")
+
         if not all([account_id, access_key, secret_key]):
             return None
+
         return boto3.client(
             "s3",
             endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
@@ -666,17 +669,19 @@ def init_r2():
         )
     except Exception as e:
         logger.error(f"R2 init failed: {e}")
-    return None
+        return None
 
 
 @st.cache_resource
 def init_b2():
     if not BOTO_AVAILABLE:
         return None
+
     try:
         key_id = secret("B2_KEY_ID")
         app_key = secret("B2_APPLICATION_KEY")
         region = secret("B2_REGION", "us-west-002")
+
         if not key_id or not app_key:
             return None
 
@@ -687,6 +692,7 @@ def init_b2():
             aws_secret_access_key=app_key,
             region_name=region,
         )
+
         logger.info(f"B2 connected using boto3 S3-compatible API, region: {region}")
         return client
     except Exception as e:
@@ -698,9 +704,11 @@ def init_b2():
 def init_qdrant():
     if not QDRANT_AVAILABLE:
         return None
+
     try:
         url = secret("QDRANT_URL")
         api_key = secret("QDRANT_API_KEY")
+
         if not url or not api_key:
             return None
 
@@ -714,22 +722,26 @@ def init_qdrant():
                     collection_name=collection,
                     vectors_config=VectorParams(size=384, distance=Distance.COSINE),
                 )
+
         return client
     except Exception as e:
         logger.error(f"Qdrant init failed: {e}")
-    return None
+        return None
 
 
 @st.cache_resource
 def init_minio():
     if not BOTO_AVAILABLE:
         return None
+
     try:
         endpoint = secret("MINIO_ENDPOINT")
         access_key = secret("MINIO_ACCESS_KEY")
         secret_key = secret("MINIO_SECRET_KEY")
+
         if not endpoint or not access_key or not secret_key:
             return None
+
         return boto3.client(
             "s3",
             endpoint_url=endpoint,
@@ -739,7 +751,7 @@ def init_minio():
         )
     except Exception as e:
         logger.error(f"MinIO init failed: {e}")
-    return None
+        return None
 
 
 supabase = init_supabase()
@@ -758,9 +770,11 @@ def get_setting(key: str, default: str = "") -> str:
         return str(val)
 
     sb = globals().get("supabase")
+
     if sb:
         try:
             res = sb.table("app_settings").select("value").eq("key", key).execute()
+
             if res.data and res.data[0].get("value"):
                 val = res.data[0]["value"]
                 st.session_state[f"setting_{key}"] = val
@@ -773,7 +787,9 @@ def get_setting(key: str, default: str = "") -> str:
 
 def set_setting(key: str, value: str):
     st.session_state[f"setting_{key}"] = value
+
     sb = globals().get("supabase")
+
     if sb:
         try:
             sb.table("app_settings").upsert(
@@ -788,13 +804,29 @@ def set_setting(key: str, value: str):
 
 
 # ============================================================
-# BACK BUTTON
+# BACK BUTTON / SIDEBAR HELPERS
 # ============================================================
 def render_back_button():
-    if st.session_state.get("page", "feed") != "feed":
-        if st.button("⬅️ Back to Dashboard", key=f"back_{st.session_state.get('page', 'main')}"):
-            st.session_state.page = "feed"
-            st.rerun()
+    if "sidebar_open" not in st.session_state:
+        st.session_state.sidebar_open = True
+
+    col1, col2, col3 = st.columns([2, 2, 2])
+
+    with col1:
+        if st.session_state.get("page", "feed") != "feed":
+            if st.button("⬅️ Back to Dashboard", key=f"back_{st.session_state.get('page', 'main')}"):
+                st.session_state.page = "feed"
+                st.rerun()
+
+    with col2:
+        if st.session_state.sidebar_open:
+            if st.button("🙈 Hide Sidebar", key="hide_sidebar_from_page"):
+                st.session_state.sidebar_open = False
+                st.rerun()
+        else:
+            if st.button("☰ Show Sidebar", key="show_sidebar_from_page"):
+                st.session_state.sidebar_open = True
+                st.rerun()
 
 
 # ============================================================
@@ -802,8 +834,10 @@ def render_back_button():
 # ============================================================
 def get_training_links():
     sb = globals().get("supabase")
+
     if not sb:
         return []
+
     try:
         res = sb.table("ai_training_links").select("*").order("created_at", desc=True).limit(30).execute()
         return res.data or []
@@ -813,6 +847,7 @@ def get_training_links():
 
 def add_training_link(url: str, title: str, user_email: str):
     sb = globals().get("supabase")
+
     if not sb:
         return False
 
@@ -831,6 +866,7 @@ def add_training_link(url: str, title: str, user_email: str):
                 "created_at": now_utc().isoformat(),
             }
         ).execute()
+
         return True
     except Exception as e:
         logger.error(f"Failed to add training link: {e}")
@@ -839,8 +875,10 @@ def add_training_link(url: str, title: str, user_email: str):
 
 def delete_training_link(link_id):
     sb = globals().get("supabase")
+
     if not sb:
         return False
+
     try:
         sb.table("ai_training_links").delete().eq("id", link_id).execute()
         return True
@@ -849,7 +887,7 @@ def delete_training_link(link_id):
 
 
 # ============================================================
-# COMPRESSION
+# COMPRESSION ENGINE
 # ============================================================
 def compress_data(data: bytes) -> Tuple[bytes, str]:
     if ZSTD_AVAILABLE:
@@ -882,6 +920,7 @@ def decompress_data(data: bytes, method: str) -> bytes:
             return lzma.decompress(data)
         except Exception as e:
             logger.error(f"LZMA decompression failed: {e}")
+
     return data
 
 
@@ -889,6 +928,7 @@ def decompress_data(data: bytes, method: str) -> bytes:
 # LOCAL STORAGE FALLBACK
 # ============================================================
 LOCAL_STORAGE_DIR = os.path.join(os.path.expanduser("~"), ".rta_anubandhan_storage")
+
 try:
     os.makedirs(LOCAL_STORAGE_DIR, exist_ok=True)
 except Exception:
@@ -909,19 +949,24 @@ def _safe_storage_key(key: str) -> str:
 def _local_storage_path(key: str):
     if not LOCAL_STORAGE_DIR:
         return None
+
     safe = _safe_storage_key(key)
     path = os.path.join(LOCAL_STORAGE_DIR, safe)
+
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
     except Exception:
         pass
+
     return path
 
 
 def _upload_local(key: str, data: bytes) -> bool:
     path = _local_storage_path(key)
+
     if not path:
         return False
+
     try:
         with open(path, "wb") as f:
             f.write(data)
@@ -933,8 +978,10 @@ def _upload_local(key: str, data: bytes) -> bool:
 
 def _download_local(key: str):
     path = _local_storage_path(key)
+
     if not path or not os.path.exists(path):
         return None
+
     try:
         with open(path, "rb") as f:
             return f.read()
@@ -946,6 +993,7 @@ def _download_local(key: str):
 def read_local_documents() -> List[Dict]:
     if not LOCAL_INDEX_FILE or not os.path.exists(LOCAL_INDEX_FILE):
         return []
+
     try:
         with open(LOCAL_INDEX_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -957,11 +1005,14 @@ def read_local_documents() -> List[Dict]:
 def append_local_document(doc: Dict) -> bool:
     if not LOCAL_INDEX_FILE:
         return False
+
     try:
         docs = read_local_documents()
         docs.append(doc)
+
         with open(LOCAL_INDEX_FILE, "w", encoding="utf-8") as f:
             json.dump(docs, f, indent=2, default=str)
+
         return True
     except Exception as e:
         logger.error(f"Failed to append local document: {e}")
@@ -970,19 +1021,21 @@ def append_local_document(doc: Dict) -> bool:
 
 def get_local_document_by_id(document_id: str):
     docs = read_local_documents()
+
     for d in docs:
         if str(d.get("id")) == str(document_id):
             return d
+
     return None
-
-
-# ============================================================
+    # ============================================================
 # AUDIT LOGGING
 # ============================================================
 def audit_log(email, action, rtype, rid=None, meta=None):
     sb = globals().get("supabase")
+
     if not sb:
         return
+
     try:
         sb.table("audit_logs").insert(
             {
@@ -1015,46 +1068,50 @@ class StorageSystem:
             if tier == "hot" and self.r2:
                 self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data, CacheControl="31536000")
                 return True
+        except Exception as e:
+            logger.error(f"R2 hot upload failed: {e}")
 
+        try:
             if tier == "cold" and self.b2:
                 self.b2.put_object(Bucket=self.cold_bucket, Key=key, Body=data, CacheControl="31536000")
                 return True
+        except Exception as e:
+            logger.error(f"B2 cold upload failed: {e}")
 
+        try:
             if self.r2:
                 self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data, CacheControl="31536000")
                 return True
+        except Exception as e:
+            logger.error(f"R2 fallback upload failed: {e}")
 
+        try:
             if self.minio:
                 self.minio.put_object(Bucket=self.minio_bucket, Key=key, Body=data)
                 return True
-
         except Exception as e:
-            logger.error(f"Cloud storage upload failed, falling back to local: {e}")
+            logger.error(f"MinIO upload failed: {e}")
 
         return _upload_local(key, data)
 
     def _download_from_storage(self, key: str, tier: str):
         try:
             if tier == "hot" and self.r2:
-                try:
-                    return self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
-                except Exception:
-                    pass
+                return self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
+        except Exception:
+            pass
 
+        try:
             if tier == "cold" and self.b2:
-                try:
-                    return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
-                except Exception:
-                    pass
+                return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
+        except Exception:
+            pass
 
+        try:
             if self.minio:
-                try:
-                    return self.minio.get_object(Bucket=self.minio_bucket, Key=key)["Body"].read()
-                except Exception:
-                    pass
-
-        except Exception as e:
-            logger.error(f"Cloud storage download failed: {e}")
+                return self.minio.get_object(Bucket=self.minio_bucket, Key=key)["Body"].read()
+        except Exception:
+            pass
 
         return _download_local(key)
 
@@ -1066,23 +1123,28 @@ class StorageSystem:
                     Params={"Bucket": self.hot_bucket, "Key": key},
                     ExpiresIn=expiration,
                 )
+        except Exception:
+            pass
 
+        try:
             if tier == "cold" and self.b2:
                 return self.b2.generate_presigned_url(
                     "get_object",
                     Params={"Bucket": self.cold_bucket, "Key": key},
                     ExpiresIn=expiration,
                 )
+        except Exception:
+            pass
 
+        try:
             if self.minio:
                 return self.minio.generate_presigned_url(
                     "get_object",
                     Params={"Bucket": self.minio_bucket, "Key": key},
                     ExpiresIn=expiration,
                 )
-
-        except Exception as e:
-            logger.error(f"Presigned URL failed: {e}")
+        except Exception:
+            pass
 
         return None
 
@@ -1093,8 +1155,10 @@ class StorageSystem:
             try:
                 reader = pypdf.PdfReader(io.BytesIO(file_data))
                 text = "".join([(p.extract_text() or "") + "\n" for p in reader.pages])
+
                 if text.strip():
                     return text
+
                 return self._ocr_pdf(file_data)
             except Exception:
                 return self._ocr_pdf(file_data)
@@ -1117,13 +1181,16 @@ class StorageSystem:
     def _ocr_pdf(self, data: bytes) -> str:
         if not (OCR_AVAILABLE and PDF2IMAGE_AVAILABLE):
             return ""
+
         try:
             images = convert_from_bytes(data, first_page=1, last_page=10, dpi=200)
             text = ""
+
             for img in images:
                 gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
                 _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
                 text += pytesseract.image_to_string(thresh) + "\n"
+
             return text
         except Exception as e:
             logger.error(f"PDF OCR failed: {e}")
@@ -1133,6 +1200,9 @@ class StorageSystem:
         try:
             if not file_data:
                 return {"success": False, "error": "Empty file"}
+
+            if isinstance(file_data, str):
+                file_data = file_data.encode("utf-8", "ignore")
 
             filename = sanitize_filename(filename)
             file_hash = generate_file_hash(file_data)
@@ -1144,12 +1214,17 @@ class StorageSystem:
             if sb:
                 try:
                     res = sb.table("files").select("id").eq("sha256_hash", file_hash).execute()
+
                     if res.data:
                         existing_file = res.data[0]
                 except Exception:
                     existing_file = None
             else:
-                existing_local = next((d for d in read_local_documents() if d.get("file_hash") == file_hash), None)
+                existing_local = next(
+                    (d for d in read_local_documents() if d.get("file_hash") == file_hash),
+                    None,
+                )
+
                 if existing_local:
                     return {
                         "success": True,
@@ -1206,6 +1281,7 @@ class StorageSystem:
                 text_b64 = base64.b64encode(text_bytes).decode("ascii")
 
             ratio = 0.0
+
             if len(file_data) > 0:
                 ratio = max(0.0, 1 - (len(encrypted_file) / len(file_data)))
 
@@ -1234,28 +1310,34 @@ class StorageSystem:
             if sb:
                 try:
                     file_res = sb.table("files").insert(file_row).execute()
+
                     if file_res.data:
                         inserted_id = file_res.data[0].get("id")
+
                         if inserted_id:
                             doc_id = str(inserted_id)
                             stored_in_supabase = True
 
-                            sb.table("user_documents").insert(
-                                {
-                                    "user_id": user_email,
-                                    "file_id": inserted_id,
-                                    "original_filename": filename,
-                                    "doc_type": doc_type,
-                                    "status": "active",
-                                    "is_duplicate": False,
-                                    "created_at": now_utc().isoformat(),
-                                }
-                            ).execute()
+                            try:
+                                sb.table("user_documents").insert(
+                                    {
+                                        "user_id": user_email,
+                                        "file_id": inserted_id,
+                                        "original_filename": filename,
+                                        "doc_type": doc_type,
+                                        "status": "active",
+                                        "is_duplicate": False,
+                                        "created_at": now_utc().isoformat(),
+                                    }
+                                ).execute()
+                            except Exception:
+                                pass
                 except Exception as db_error:
                     logger.error(f"Supabase file insert failed: {db_error}")
 
             if not stored_in_supabase:
                 file_row["id"] = doc_id
+
                 if not append_local_document(file_row):
                     return {"success": False, "error": "Local metadata storage unavailable"}
 
@@ -1266,41 +1348,62 @@ class StorageSystem:
                 def bg_task(did, text, fn):
                     try:
                         ai = globals().get("ai_system")
+                        sb_bg = globals().get("supabase")
+
                         summary = ai.summarize(text[:3000]) if ai and text and len(text) > 50 else ""
 
-                        if sb and summary:
-                            sb.table("files").update(
-                                {
-                                    "ai_summary": summary,
-                                    "processing_status": "ready",
-                                }
-                            ).eq("id", did).execute()
+                        if sb_bg:
+                            if summary:
+                                sb_bg.table("files").update(
+                                    {
+                                        "ai_summary": summary,
+                                        "processing_status": "ready",
+                                    }
+                                ).eq("id", did).execute()
+                            else:
+                                sb_bg.table("files").update(
+                                    {
+                                        "processing_status": "ready",
+                                    }
+                                ).eq("id", did).execute()
 
-                        gen = globals().get("generate_embedding")
-                        if QDRANT_AVAILABLE and qdrant_client and gen and text:
-                            try:
-                                qdrant_client.upsert(
-                                    collection_name="rta_documents",
-                                    points=[
-                                        PointStruct(
-                                            id=str(did),
-                                            vector=gen(text),
-                                            payload={"doc_id": str(did), "filename": fn},
-                                        )
-                                    ],
-                                )
-                            except Exception:
-                                pass
+                        if QDRANT_AVAILABLE and qdrant_client and text:
+                            PointStructLocal = globals().get("PointStruct")
+                            gen = globals().get("generate_embedding")
+
+                            if PointStructLocal and gen:
+                                try:
+                                    qdrant_client.upsert(
+                                        collection_name="rta_documents",
+                                        points=[
+                                            PointStructLocal(
+                                                id=str(did),
+                                                vector=gen(text),
+                                                payload={"doc_id": str(did), "filename": fn},
+                                            )
+                                        ],
+                                    )
+                                except Exception:
+                                    pass
 
                     except Exception as e:
                         logger.error(f"Background AI task failed: {e}")
-                        if sb:
+
+                        sb_bg = globals().get("supabase")
+
+                        if sb_bg:
                             try:
-                                sb.table("files").update({"processing_status": "failed"}).eq("id", did).execute()
+                                sb_bg.table("files").update(
+                                    {"processing_status": "failed"}
+                                ).eq("id", did).execute()
                             except Exception:
                                 pass
 
-                threading.Thread(target=bg_task, args=(doc_id, extracted_text, filename), daemon=True).start()
+                threading.Thread(
+                    target=bg_task,
+                    args=(doc_id, extracted_text, filename),
+                    daemon=True,
+                ).start()
 
             elif stored_in_supabase and sb:
                 try:
@@ -1343,13 +1446,18 @@ class StorageSystem:
             if not doc:
                 return None
 
-            data = self._download_from_storage(doc.get("storage_path"), doc.get("storage_tier", "hot"))
+            data = self._download_from_storage(
+                doc.get("storage_path"),
+                doc.get("storage_tier", "hot"),
+            )
+
             if not data:
                 return None
 
             if source == "supabase" and sb:
                 try:
                     count = int(doc.get("access_count", 0) or 0)
+
                     sb.table("files").update(
                         {
                             "access_count": count + 1,
@@ -1360,7 +1468,11 @@ class StorageSystem:
                     pass
 
             business_metrics.increment("documents_downloaded")
-            return decompress_data(decrypt_data(data), doc.get("compression_method", "none"))
+
+            return decompress_data(
+                decrypt_data(data),
+                doc.get("compression_method", "none"),
+            )
 
         except Exception as e:
             logger.error(f"Download failed: {e}")
@@ -1380,14 +1492,17 @@ class StorageSystem:
                         b64_text = result.data[0]["extracted_text_b64"]
                         method = result.data[0].get("text_compression_method", "none")
                         raw = base64.b64decode(b64_text)
+
                         return decompress_data(raw, method).decode("utf-8", "ignore")
                 except Exception:
                     pass
 
             local_doc = get_local_document_by_id(document_id)
+
             if local_doc and local_doc.get("extracted_text_b64"):
                 raw = base64.b64decode(local_doc["extracted_text_b64"])
                 method = local_doc.get("text_compression_method", "none")
+
                 return decompress_data(raw, method).decode("utf-8", "ignore")
 
             return ""
@@ -1399,11 +1514,13 @@ class StorageSystem:
 
 storage_system = StorageSystem()
 
+
 # ============================================================
 # AUTO TIERING
 # ============================================================
 def auto_tier_documents():
     sb = globals().get("supabase")
+
     if not sb:
         return {"error": "Supabase unavailable"}
 
@@ -1469,12 +1586,15 @@ def auto_tier_documents():
         return {"moved_to_cold": moved_cold, "moved_to_hot": moved_hot}
 
     except Exception as e:
-        return {"error": str(e)} 
+        return {"error": str(e)}
+
+
 # ============================================================
-# METRIC HELPER
+# SYSTEM METRIC HELPER
 # ============================================================
 def increment_system_metric(metric_name: str, amount: int = 1):
     sb = globals().get("supabase")
+
     if not sb:
         return
 
@@ -1483,6 +1603,7 @@ def increment_system_metric(metric_name: str, amount: int = 1):
 
         if res.data:
             current = int(res.data[0].get("metric_value", 0) or 0)
+
             sb.table("system_metrics").update(
                 {"metric_value": current + amount}
             ).eq("metric_name", metric_name).execute()
@@ -1527,6 +1648,7 @@ def generate_embedding(text: str) -> List[float]:
         v[int(hashlib.md5(w.encode("utf-8", "ignore")).hexdigest()[:8], 16) % dim] += 1
 
     n = np.linalg.norm(v)
+
     return (v / n if n > 0 else v).tolist()
 
 
@@ -1602,6 +1724,7 @@ def search_documents(query: str, limit: int = 10) -> List[Dict]:
         return [
             d for d in local_docs
             if q.lower() in str(d.get("filename", "")).lower()
+            or q.lower() in str(d.get("ai_summary", "")).lower()
         ][:limit]
 
     return sorted(local_docs, key=lambda x: str(x.get("uploaded_at", "")), reverse=True)[:limit]
@@ -1625,6 +1748,7 @@ class MultiAI:
             ("Anthropic", "ANTHROPIC_API_KEY"),
         ]:
             k = get_setting(key_name)
+
             if k:
                 providers.append({"name": name, "key": k.strip()})
 
@@ -1691,6 +1815,7 @@ class MultiAI:
         business_metrics.increment("ai_queries_total")
 
         prompt = str(prompt or "")
+
         if not prompt:
             return {"success": False, "error": "Empty prompt"}
 
@@ -1702,11 +1827,13 @@ class MultiAI:
         if redis_client:
             try:
                 c = redis_client.get(f"ai_cache:{h}")
+
                 if isinstance(c, bytes):
                     c = c.decode("utf-8", "ignore")
 
                 if c:
                     business_metrics.increment("ai_queries_cached")
+
                     return {
                         "success": True,
                         "response": json.loads(c),
@@ -1726,6 +1853,7 @@ class MultiAI:
 
                 if hits:
                     business_metrics.increment("ai_queries_cached")
+
                     return {
                         "success": True,
                         "response": hits[0].payload.get("response"),
@@ -1754,20 +1882,24 @@ class MultiAI:
 
                     if qdrant_client:
                         try:
-                            qdrant_client.upsert(
-                                collection_name="ai_semantic_cache",
-                                points=[
-                                    PointStruct(
-                                        id=uuid.uuid4().hex,
-                                        vector=generate_embedding(prompt),
-                                        payload={"query": prompt, "response": resp},
-                                    )
-                                ],
-                            )
+                            PointStructLocal = globals().get("PointStruct")
+
+                            if PointStructLocal:
+                                qdrant_client.upsert(
+                                    collection_name="ai_semantic_cache",
+                                    points=[
+                                        PointStructLocal(
+                                            id=uuid.uuid4().hex,
+                                            vector=generate_embedding(prompt),
+                                            payload={"query": prompt, "response": resp},
+                                        )
+                                    ],
+                                )
                         except Exception:
                             pass
 
                     est_tokens = (len(prompt) + len(str(resp))) // 4
+
                     increment_system_metric("ai_requests_total", 1)
                     increment_system_metric("ai_tokens_estimated", est_tokens)
 
@@ -1795,15 +1927,18 @@ ai_system = MultiAI()
 # ============================================================
 def agentic_web_search(query: str, stype: str = "gov", allowed_domains=None) -> str:
     key = get_setting("SERPER_API_KEY")
+
     if not key:
         return ""
 
     query = str(query or "").strip()
+
     if not query:
         return ""
 
     if allowed_domains:
         domains = list(dict.fromkeys([d for d in allowed_domains if d]))[:5]
+
         if domains:
             query += " " + " OR ".join([f"site:{d}" for d in domains])
     elif stype == "gov":
@@ -1839,6 +1974,7 @@ def cascading_search(query: str, language: str = "English", limit: int = 5) -> L
 
     try:
         docs = search_documents(q, limit)
+
         for d in docs:
             results.append(
                 {
@@ -1897,7 +2033,7 @@ def cascading_search(query: str, language: str = "English", limit: int = 5) -> L
 def hash_password(password: str) -> str:
     password = str(password or "")
 
-    if BCRYPT_AVAILABLE:
+    if BCRYPT_AVAILABLE and bcrypt:
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=10)).decode("utf-8")
 
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
@@ -1910,7 +2046,7 @@ def check_password(password: str, password_hash: str) -> bool:
     password = str(password)
     password_hash = str(password_hash)
 
-    if BCRYPT_AVAILABLE and password_hash.startswith("$2"):
+    if BCRYPT_AVAILABLE and bcrypt and password_hash.startswith("$2"):
         try:
             return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
         except Exception:
@@ -1974,6 +2110,7 @@ def has_any_user() -> bool:
     if sb:
         try:
             r = sb.table("users").select("id").limit(1).execute()
+
             if r.data:
                 return True
         except Exception:
@@ -2010,6 +2147,7 @@ def create_admin_user(email: str, name: str, password: str, admin_level: str = "
     if sb:
         try:
             r = sb.table("users").insert(user_row).execute()
+
             if r.data:
                 return {"success": True, "backend": "supabase"}
         except Exception as e:
@@ -2043,9 +2181,11 @@ def get_user(email: str):
     if redis_client:
         try:
             c = redis_client.get(f"user_v2:{email}")
+
             if c:
                 if isinstance(c, bytes):
                     c = c.decode("utf-8", "ignore")
+
                 return json.loads(c)
         except Exception:
             pass
@@ -2072,6 +2212,7 @@ def get_user(email: str):
             pass
 
     local_admin = get_local_admin()
+
     if local_admin and local_admin.get("email") == email:
         return local_admin
 
@@ -2083,6 +2224,7 @@ def login_rate_limited(email: str) -> bool:
         try:
             k = f"login_attempts:{email}"
             v = redis_client.get(k)
+
             return int(v) > 5 if v else False
         except Exception:
             return False
@@ -2113,10 +2255,12 @@ def increment_login_attempt(email: str):
     if redis_client:
         try:
             k = f"login_attempts:{email}"
+
             redis_client.set(k, "0", ex=900, nx=True)
             redis_client.incr(k)
         except Exception:
             pass
+
         return
 
     sb = globals().get("supabase")
@@ -2144,6 +2288,7 @@ def init_session_state():
         "page": "feed",
         "admin_level": "staff",
         "maintenance_mode": False,
+        "sidebar_open": True,
     }
 
     for k, v in defaults.items():
@@ -2166,6 +2311,7 @@ def try_auto_login():
     h = hashlib.sha256(str(token).encode("utf-8")).hexdigest()
 
     sb = globals().get("supabase")
+
     if not sb:
         return
 
@@ -2222,13 +2368,17 @@ def do_login(u: Dict):
                     "expires_at": (now_utc() + timedelta(days=SESSION_DAYS)).isoformat(),
                 }
             ).execute()
-
-            cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600)
         except Exception:
             pass
 
+    try:
+        cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600)
+    except Exception:
+        pass
+
     audit_log(u.get("email", "unknown"), "user.login", "user", None)
     business_metrics.increment("active_users", u.get("email"))
+
     st.rerun()
 
 
@@ -2237,6 +2387,7 @@ def logout():
 
     try:
         token = cookies.get(COOKIE_NAME)
+
         if token:
             h = hashlib.sha256(str(token).encode("utf-8")).hexdigest()
     except Exception:
@@ -2251,7 +2402,11 @@ def logout():
             pass
 
     email = (st.session_state.get("user") or {}).get("email", "unknown")
-    audit_log(email, "user.logout", "user", None)
+
+    try:
+        audit_log(email, "user.logout", "user", None)
+    except Exception:
+        pass
 
     st.session_state.clear()
 
@@ -2305,8 +2460,10 @@ def is_maintenance_mode() -> bool:
     if redis_client:
         try:
             val = redis_client.get("maintenance_mode")
+
             if isinstance(val, bytes):
                 val = val.decode("utf-8", "ignore")
+
             return val == "1"
         except Exception:
             pass
@@ -2362,9 +2519,11 @@ def unpack_message(payload: str) -> str:
         if ":" in payload:
             method, b64 = payload.split(":", 1)
             raw = base64.b64decode(b64)
+
             return decompress_data(raw, method).decode("utf-8", "ignore")
 
         raw = base64.b64decode(payload)
+
         return decompress_data(raw, "lzma").decode("utf-8", "ignore")
     except Exception:
         return str(payload)
@@ -2385,9 +2544,7 @@ def bootstrap_env_admin():
         if email and password:
             create_admin_user(email, name, password, "system_admin")
     except Exception as e:
-        logger.error(f"Admin bootstrap failed: {e}")
-
-
+        logger.error(f"Admin bootstrap failed: {e}") 
 # ============================================================
 # UI PAGES
 # ============================================================
@@ -2552,6 +2709,7 @@ def show_feed():
                 tags = sb.table("post_tags").select("tag").execute().data or []
 
                 tag_counts = {}
+
                 for t in tags:
                     tag_counts[t.get("tag")] = tag_counts.get(t.get("tag"), 0) + 1
 
@@ -3032,6 +3190,8 @@ def show_feed():
 
 
 def show_workspace():
+    render_back_button()
+
     st.markdown("### 🧰 Workspace")
 
     c = st.columns(4)
@@ -3227,35 +3387,6 @@ def show_documents():
     u = st.session_state.user or {}
     st.markdown("### 📄 Documents")
 
-    components.html(
-        """
-        <div style="border:2px dashed #ccc; padding:15px; border-radius:8px; text-align:center; background:white;">
-            <h4>🔐 Smart Upload Hash Check</h4>
-            <input type="file" id="smart-file-input" accept=".pdf,.jpg,.png" style="margin:10px 0;" />
-            <div id="hash-status" style="font-family:monospace; font-size:12px; color:#666;"></div>
-        </div>
-
-        <script>
-        document.getElementById('smart-file-input').addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            const status = document.getElementById('hash-status');
-            status.textContent = 'Computing SHA-256...';
-
-            const buffer = await file.arrayBuffer();
-            const hashHex = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)))
-                .map(b => b.toString(16).padStart(2, '0'))
-                .join('');
-
-            status.textContent = `✅ Hash: ${hashHex.substring(0, 16)}... Ready`;
-            status.style.color = '#059669';
-        });
-        </script>
-        """,
-        height=160,
-    )
-
     file = st.file_uploader("Upload", type=["pdf", "jpg", "png", "doc", "docx"])
 
     if file:
@@ -3409,7 +3540,62 @@ def show_messages():
 
         with c3:
             st.caption(str(m.get("created_at", ""))[:16]) 
-    # ============================================================
+            # ============================================================
+# AI ASSISTANT PAGE
+# ============================================================
+def show_ai():
+    render_back_button()
+
+    st.markdown("### 🤖 AI Assistant")
+
+    training_links = get_training_links()
+
+    if training_links:
+        st.caption(f"🎓 {len(training_links)} trusted training sources active")
+
+    lang = st.selectbox(
+        "Response Language",
+        ["English", "Telugu", "Hindi"],
+        key="ai_language",
+    )
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    if p := st.chat_input("Ask..."):
+        st.session_state.messages.append({"role": "user", "content": p})
+
+        with st.chat_message("user"):
+            st.markdown(p)
+
+        with st.chat_message("assistant"):
+            src = cascading_search(p, lang, 5)
+
+            ctx = "Answer using only provided context and trusted sources.\n\n"
+
+            if src:
+                ctx += "".join(
+                    [
+                        f"- {s.get('filename', 'Source')}: {s.get('ai_summary', '')}\n"
+                        for s in src
+                    ]
+                )
+            else:
+                ctx += "No internal sources found.\n"
+
+            r = ai_system.request(ctx + f"\nQuestion: {p}", lang)
+
+            resp = r.get("response") if r.get("success") else "AI unavailable. Add API keys in Admin Panel -> AI Settings."
+
+            st.markdown(resp)
+            st.session_state.messages.append({"role": "assistant", "content": resp})
+
+
+# ============================================================
 # SYSTEM HEALTH
 # ============================================================
 def show_system_health():
@@ -3481,61 +3667,6 @@ def show_system_health():
 
 
 # ============================================================
-# AI ASSISTANT PAGE
-# ============================================================
-def show_ai():
-    render_back_button()
-
-    st.markdown("### 🤖 AI Assistant")
-
-    training_links = get_training_links()
-
-    if training_links:
-        st.caption(f"🎓 {len(training_links)} trusted training sources active")
-
-    lang = st.selectbox(
-        "Response Language",
-        ["English", "Telugu", "Hindi"],
-        key="ai_language",
-    )
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
-
-    if p := st.chat_input("Ask..."):
-        st.session_state.messages.append({"role": "user", "content": p})
-
-        with st.chat_message("user"):
-            st.markdown(p)
-
-        with st.chat_message("assistant"):
-            src = cascading_search(p, lang, 5)
-
-            ctx = "Answer using only provided context and trusted sources.\n\n"
-
-            if src:
-                ctx += "".join(
-                    [
-                        f"- {s.get('filename', 'Source')}: {s.get('ai_summary', '')}\n"
-                        for s in src
-                    ]
-                )
-            else:
-                ctx += "No internal sources found.\n"
-
-            r = ai_system.request(ctx + f"\nQuestion: {p}", lang)
-
-            resp = r.get("response") if r.get("success") else "AI unavailable. Add API keys in Admin Panel -> AI Settings."
-
-            st.markdown(resp)
-            st.session_state.messages.append({"role": "assistant", "content": resp})
-
-
-# ============================================================
 # ADMIN PANEL
 # ============================================================
 def show_admin():
@@ -3583,6 +3714,8 @@ def show_admin():
         "system_admin",
     ]
 
+    sb = globals().get("supabase")
+
     # --------------------------------------------------------
     # HEALTH
     # --------------------------------------------------------
@@ -3594,8 +3727,6 @@ def show_admin():
 
         st.divider()
         st.markdown("#### 📜 Recent Errors")
-
-        sb = globals().get("supabase")
 
         if sb:
             try:
@@ -3651,8 +3782,6 @@ def show_admin():
                         if len(pw) < 8:
                             show_toast("Password must be at least 8 characters", "error")
                         else:
-                            sb = globals().get("supabase")
-
                             if sb:
                                 try:
                                     sb.table("users").insert(
@@ -3676,8 +3805,6 @@ def show_admin():
             csvf = st.file_uploader("CSV columns: email,name,designation,admin_level,password", type=["csv"])
 
             if csvf and st.button("Import", key="bimp"):
-                sb = globals().get("supabase")
-
                 if not sb:
                     show_toast("Supabase not configured", "warning")
                 else:
@@ -3733,7 +3860,6 @@ def show_admin():
         st.divider()
 
         users = []
-        sb = globals().get("supabase")
 
         if sb:
             try:
@@ -3922,8 +4048,6 @@ def show_admin():
     elif section == "📊 Storage & AI":
         st.markdown("#### 📊 Storage & AI Metrics")
 
-        sb = globals().get("supabase")
-
         if sb:
             try:
                 metrics = sb.table("system_metrics").select("*").execute().data or []
@@ -3977,8 +4101,6 @@ def show_admin():
     # --------------------------------------------------------
     elif section == "🔄 Maintenance":
         st.markdown("#### 🔄 Maintenance")
-
-        sb = globals().get("supabase")
 
         if st.button("Reprocess Failed Documents", key="reproc"):
             if not sb:
@@ -4076,8 +4198,6 @@ def show_admin():
     elif section == "📋 Audit":
         st.markdown("#### 📋 Audit")
 
-        sb = globals().get("supabase")
-
         if sb:
             try:
                 logs = (
@@ -4124,8 +4244,6 @@ def show_admin():
         st.divider()
 
         if st.button("🔒 Force Logout All", type="secondary", key="flog"):
-            sb = globals().get("supabase")
-
             if sb:
                 try:
                     sb.table("sessions").delete().neq("token_hash", "").execute()
@@ -4158,8 +4276,6 @@ def show_admin():
     # --------------------------------------------------------
     elif section == "📢 Announcements":
         st.markdown("#### 📢 Announcements")
-
-        sb = globals().get("supabase")
 
         if not sb:
             st.info("Supabase is not configured.")
@@ -4225,36 +4341,30 @@ def show_admin():
 # ============================================================
 # NAVIGATION
 # ============================================================
-def render_back_button():
+def render_sidebar_nav():
+    u = st.session_state.user or {}
+
     if "sidebar_open" not in st.session_state:
         st.session_state.sidebar_open = True
 
-    col1, col2, col3 = st.columns([2, 2, 2])
+    # If sidebar is closed, show open button in main page
+    if not st.session_state.sidebar_open:
+        c1, _ = st.columns([1, 5])
 
-    with col1:
-        if st.session_state.get("page", "feed") != "feed":
-            if st.button("⬅️ Back to Dashboard", key=f"back_{st.session_state.get('page', 'main')}"):
-                st.session_state.page = "feed"
-                st.rerun()
-
-    with col2:
-        if st.session_state.sidebar_open:
-            if st.button("🙈 Hide Sidebar", key="hide_sidebar_from_page"):
-                st.session_state.sidebar_open = False
-                st.rerun()
-        else:
-            if st.button("☰ Show Sidebar", key="show_sidebar_from_page"):
+        with c1:
+            if st.button("☰ Open Sidebar", use_container_width=True, key="open_sidebar"):
                 st.session_state.sidebar_open = True
                 st.rerun()
-    u = st.session_state.user or {}
+
+        return
 
     with st.sidebar:
         st.markdown(
             f"""
             <div style="background: linear-gradient(135deg, #0A66C2 0%, #004182 100%); padding: 16px; border-radius: 12px; color: white; margin-bottom: 20px;">
                 <div style="font-size: 14px; opacity: 0.9;">Welcome,</div>
-                <div style="font-size: 18px; font-weight: 700;">{html.escape(str(u.get('name', 'User')))}</div>
-                <div style="font-size: 12px; opacity: 0.8;">🏢 {html.escape(str(u.get('office_name', 'Office')))}</div>
+                <div style="font-size: 18px; font-weight: 700;">{str(u.get('name', 'User'))}</div>
+                <div style="font-size: 12px; opacity: 0.8;">🏢 {str(u.get('office_name', 'Office'))}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -4308,9 +4418,11 @@ def render_back_button():
 
         selected = menu_items[default_index]
 
-        if OPTION_MENU_LIB:
+        om = globals().get("option_menu")
+
+        if om is not None:
             try:
-                selected = option_menu(
+                selected = om(
                     "Navigation",
                     menu_items,
                     icons=menu_icons,
@@ -4339,8 +4451,18 @@ def render_back_button():
 
         st.divider()
 
-        if st.button("🚪 Logout", use_container_width=True, type="secondary"):
-            logout()
+        if st.button("⬅️ Close Sidebar", use_container_width=True, key="close_sidebar"):
+            st.session_state.sidebar_open = False
+            st.rerun()
+
+        logout_func = globals().get("logout")
+
+        if st.button("🚪 Logout", use_container_width=True, key="logout_btn"):
+            if logout_func:
+                logout_func()
+            else:
+                st.session_state.clear()
+                st.rerun()
 
     st.session_state.page = page_map.get(selected, "feed")
 
