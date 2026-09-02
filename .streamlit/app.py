@@ -34,8 +34,11 @@ except Exception:
     create_client = None
     SUPABASE_LIB = False
 
+try
 try:
-    try:     from streamlit_cookies_controller import CookieController except Exception:     CookieController = None
+    from streamlit_cookies_controller import CookieController
+except Exception:
+    CookieController = None
     COOKIES_LIB = True
 except Exception:
     CookieController = None
