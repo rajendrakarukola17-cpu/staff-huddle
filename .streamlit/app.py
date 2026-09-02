@@ -1050,14 +1050,14 @@ def check_password(p, h):
 def get_user(email):
     if redis_client:
         try:
-            c = redis_client.get(f"user:{email}")
+            c = redis_client.get(f"user_v2:{email}")
             if c:
                 return json.loads(c)
         except Exception:
             pass
     if supabase:
         try:
-            r = supabase.table("users").select(
+            r = supabase.table("user_v2").select(
                 "id, email, name, password_hash, office_code, office_name, designation, section, seat_number, admin_level, active"
             ).eq("email", email).execute()
             if r.data:
