@@ -1817,7 +1817,7 @@ def show_admin():
                     show_toast(f"Import failed: {e}", "error")
                     
         if supabase:
-            for usr in supabase.table("users").select("id, email, name, active, admin_level").execute().data or []:
+           r = supabase.table("users").select("id, email, name, office_code, office_name, designation, section, seat_number, admin_level, active, password_hash").eq("email", email).execute(), name, active, admin_level").execute().data or []:
                 c1, c2, c3 = st.columns([3, 1, 1])
                 c1.write(f"{'🟢' if usr.get('active', True) else '🔴'} **{usr['name']}** ({usr['email']})")
                 if c2.button("🔑", key=f"rst_{usr['id']}"):
