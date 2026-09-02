@@ -193,10 +193,16 @@ st.set_page_config(
 # ============================================================
 class DummyCookieController:
     def get(self, name):
-        return st.session_state.get(f"_cookie_{name}")
+        val = st.session_state.get(f"_cookie_{name}")
+
+        if val and isinstance(val, str) and len(val) > 5:
+            return val
+
+        return None
 
     def set(self, name, value, max_age=None):
-        st.session_state[f"_cookie_{name}"] = value
+        if value and isinstance(value, str) and len(value) > 5:
+            st.session_state[f"_cookie_{name}"] = value
 
     def delete(self, name):
         st.session_state.pop(f"_cookie_{name}", None)
