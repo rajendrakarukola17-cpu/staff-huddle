@@ -1,7 +1,20 @@
 """
-RTA ANUBANDHAN — Fixed Production
-Core Infrastructure, Cloud Initialization, Multi-Tier Storage, Admin Bootstrap.
+RTA ANUBANDHAN — UPDATED FINAL APP
+PART 1/3
+
+Features included:
+- Fixed syntax errors
+- Safe cookie handling
+- Settings management for Admin-controlled AI keys
+- AI Training links helpers
+- B2 via boto3
+- Two-tier storage logic
+- Compression / encryption
+- Local fallback storage
+- Audit logging
+- Storage system with deduplication
 """
+
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -20,6 +33,7 @@ import uuid
 import threading
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta, timezone, date
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
@@ -90,13 +104,6 @@ try:
 except Exception:
     pypdf = None
     PDF_AVAILABLE = False
-
-try:
-    import b2sdk.v2 as b2
-    B2_AVAILABLE = True
-except Exception:
-    b2 = None
-    B2_AVAILABLE = False
 
 try:
     from qdrant_client import QdrantClient
@@ -183,7 +190,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# COOKIE FALLBACK
+# SAFE COOKIE CONTROLLER
 # ============================================================
 class DummyCookieController:
     def get(self, name):
@@ -194,6 +201,7 @@ class DummyCookieController:
 
     def delete(self, name):
         st.session_state.pop(f"_cookie_{name}", None)
+
 
 if COOKIES_LIB:
     try:
@@ -260,6 +268,7 @@ try:
         """
         <script>
         const parentDoc = window.parent.document;
+
         parentDoc.addEventListener('contextmenu', e => e.preventDefault());
 
         parentDoc.addEventListener('keyup', (e) => {
@@ -428,7 +437,7 @@ body, .stApp {
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ============================================================
-# UTILITIES
+# BASIC UTILITIES
 # ============================================================
 def secret(key: str, default: str = "") -> str:
     try:
@@ -662,20 +671,27 @@ def init_r2():
 
 @st.cache_resource
 def init_b2():
-    if not B2_AVAILABLE:
+    if not BOTO_AVAILABLE:
         return None
     try:
         key_id = secret("B2_KEY_ID")
         app_key = secret("B2_APPLICATION_KEY")
+        region = secret("B2_REGION", "us-west-002")
         if not key_id or not app_key:
             return None
-        info = b2.InMemoryAccountInfo()
-        client = b2.B2Api(info)
-        client.authorize_account("production", key_id, app_key)
+
+        client = boto3.client(
+            "s3",
+            endpoint_url=f"https://s3.{region}.backblazeb2.com",
+            aws_access_key_id=key_id,
+            aws_secret_access_key=app_key,
+            region_name=region,
+        )
+        logger.info(f"B2 connected using boto3 S3-compatible API, region: {region}")
         return client
     except Exception as e:
         logger.error(f"B2 init failed: {e}")
-    return None
+        return None
 
 
 @st.cache_resource
@@ -687,7 +703,9 @@ def init_qdrant():
         api_key = secret("QDRANT_API_KEY")
         if not url or not api_key:
             return None
+
         client = QdrantClient(url=url, api_key=api_key)
+
         for collection in ["rta_documents", "ai_semantic_cache"]:
             try:
                 client.get_collection(collection)
@@ -730,6 +748,105 @@ r2_client = init_r2()
 b2_client = init_b2()
 qdrant_client = init_qdrant()
 minio_client = init_minio()
+
+# ============================================================
+# SETTINGS MANAGEMENT
+# ============================================================
+def get_setting(key: str, default: str = "") -> str:
+    val = st.session_state.get(f"setting_{key}")
+    if val:
+        return str(val)
+
+    sb = globals().get("supabase")
+    if sb:
+        try:
+            res = sb.table("app_settings").select("value").eq("key", key).execute()
+            if res.data and res.data[0].get("value"):
+                val = res.data[0]["value"]
+                st.session_state[f"setting_{key}"] = val
+                return val
+        except Exception:
+            pass
+
+    return secret(key, default)
+
+
+def set_setting(key: str, value: str):
+    st.session_state[f"setting_{key}"] = value
+    sb = globals().get("supabase")
+    if sb:
+        try:
+            sb.table("app_settings").upsert(
+                {
+                    "key": key,
+                    "value": value,
+                    "updated_at": now_utc().isoformat(),
+                }
+            ).execute()
+        except Exception as e:
+            logger.error(f"Failed to save setting {key}: {e}")
+
+
+# ============================================================
+# BACK BUTTON
+# ============================================================
+def render_back_button():
+    if st.session_state.get("page", "feed") != "feed":
+        if st.button("⬅️ Back to Dashboard", key=f"back_{st.session_state.get('page', 'main')}"):
+            st.session_state.page = "feed"
+            st.rerun()
+
+
+# ============================================================
+# AI TRAINING LINK HELPERS
+# ============================================================
+def get_training_links():
+    sb = globals().get("supabase")
+    if not sb:
+        return []
+    try:
+        res = sb.table("ai_training_links").select("*").order("created_at", desc=True).limit(30).execute()
+        return res.data or []
+    except Exception:
+        return []
+
+
+def add_training_link(url: str, title: str, user_email: str):
+    sb = globals().get("supabase")
+    if not sb:
+        return False
+
+    try:
+        if not url.startswith("http"):
+            url = "https://" + url
+
+        domain = urlparse(url).netloc.replace("www.", "")
+
+        sb.table("ai_training_links").insert(
+            {
+                "url": url,
+                "title": title or domain,
+                "domain": domain,
+                "added_by": user_email,
+                "created_at": now_utc().isoformat(),
+            }
+        ).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to add training link: {e}")
+        return False
+
+
+def delete_training_link(link_id):
+    sb = globals().get("supabase")
+    if not sb:
+        return False
+    try:
+        sb.table("ai_training_links").delete().eq("id", link_id).execute()
+        return True
+    except Exception:
+        return False
+
 
 # ============================================================
 # COMPRESSION
@@ -851,208 +968,16 @@ def append_local_document(doc: Dict) -> bool:
         return False
 
 
-# ============================================================
-# EMBEDDINGS
-# ============================================================
-def generate_embedding(text: str) -> List[float]:
-    dim = 384
-    text = str(text or "")[:1500]
-    key = secret("GEMINI_EMBEDDING_KEY") or secret("GEMINI_API_KEY")
-
-    if key:
-        try:
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={key}",
-                json={"content": {"parts": [{"text": text}]}},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                vals = list(r.json().get("embedding", {}).get("values", []))[:dim]
-                return vals + [0.0] * (dim - len(vals))
-        except Exception:
-            pass
-
-    words = text.lower().split()
-    v = np.zeros(dim)
-    for w in words:
-        v[int(hashlib.md5(w.encode("utf-8", "ignore")).hexdigest()[:8], 16) % dim] += 1
-    n = np.linalg.norm(v)
-    return (v / n if n > 0 else v).tolist()
+def get_local_document_by_id(document_id: str):
+    docs = read_local_documents()
+    for d in docs:
+        if str(d.get("id")) == str(document_id):
+            return d
+    return None
 
 
 # ============================================================
-# MULTI AI
-# ============================================================
-gemini_breaker = CircuitBreaker("gemini")
-openai_breaker = CircuitBreaker("openai")
-anthropic_breaker = CircuitBreaker("anthropic")
-
-
-class MultiAI:
-    def __init__(self):
-        self.providers = []
-        for name, key in [
-            ("Gemini", secret("GEMINI_API_KEY")),
-            ("OpenAI", secret("OPENAI_API_KEY")),
-            ("Anthropic", secret("ANTHROPIC_API_KEY")),
-        ]:
-            if key:
-                self.providers.append({"name": name, "key": key.strip()})
-
-    def _call_gemini(self, prompt, key):
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=15,
-        )
-        if r.status_code == 200:
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        if r.status_code == 429:
-            raise Exception("Rate limited")
-        return None
-
-    def _call_openai(self, prompt, key):
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}"},
-            json={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": prompt}]},
-            timeout=15,
-        )
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
-        if r.status_code == 429:
-            raise Exception("Rate limited")
-        return None
-
-    def _call_anthropic(self, prompt, key):
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-            json={
-                "model": "claude-3-haiku-20240307",
-                "max_tokens": 500,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=15,
-        )
-        if r.status_code == 200:
-            return r.json()["content"][0]["text"].strip()
-        if r.status_code == 429:
-            raise Exception("Rate limited")
-        return None
-
-    def request(self, prompt: str):
-        business_metrics.increment("ai_queries_total")
-        prompt = str(prompt or "")
-        if not prompt:
-            return {"success": False, "error": "Empty prompt"}
-
-        h = hashlib.md5(prompt.encode("utf-8", "ignore")).hexdigest()
-
-        if redis_client:
-            try:
-                c = redis_client.get(f"ai_cache:{h}")
-                if isinstance(c, bytes):
-                    c = c.decode("utf-8", "ignore")
-                if c:
-                    business_metrics.increment("ai_queries_cached")
-                    return {"success": True, "response": json.loads(c), "provider": "cache"}
-            except Exception:
-                pass
-
-        if qdrant_client:
-            try:
-                hits = qdrant_client.search(
-                    collection_name="ai_semantic_cache",
-                    query_vector=generate_embedding(prompt),
-                    limit=1,
-                    score_threshold=0.90,
-                )
-                if hits:
-                    business_metrics.increment("ai_queries_cached")
-                    return {"success": True, "response": hits[0].payload.get("response"), "provider": "semantic_cache"}
-            except Exception:
-                pass
-
-        for provider in self.providers:
-            try:
-                resp = None
-                if provider["name"] == "Gemini":
-                    resp = gemini_breaker.call(self._call_gemini, prompt, provider["key"])
-                elif provider["name"] == "OpenAI":
-                    resp = openai_breaker.call(self._call_openai, prompt, provider["key"])
-                elif provider["name"] == "Anthropic":
-                    resp = anthropic_breaker.call(self._call_anthropic, prompt, provider["key"])
-
-                if resp:
-                    if redis_client:
-                        try:
-                            redis_client.setex(f"ai_cache:{h}", 86400, json.dumps(resp))
-                        except Exception:
-                            pass
-
-                    if qdrant_client:
-                        try:
-                            qdrant_client.upsert(
-                                collection_name="ai_semantic_cache",
-                                points=[
-                                    PointStruct(
-                                        id=uuid.uuid4().hex,
-                                        vector=generate_embedding(prompt),
-                                        payload={"query": prompt, "response": resp},
-                                    )
-                                ],
-                            )
-                        except Exception:
-                            pass
-
-                    return {"success": True, "response": resp, "provider": provider["name"]}
-            except Exception:
-                continue
-
-        return {"success": False, "error": "All providers failed"}
-
-    def summarize(self, text: str):
-        r = self.request(f"Summarize: {str(text or '')[:3000]}")
-        return r.get("response") if r.get("success") else None
-
-
-ai_system = MultiAI()
-
-# ============================================================
-# WEB SEARCH
-# ============================================================
-def agentic_web_search(query: str, stype: str = "gov") -> str:
-    key = secret("SERPER_API_KEY")
-    if not key:
-        return ""
-
-    query = str(query or "").strip()
-    if not query:
-        return ""
-
-    if stype == "gov":
-        query = f"{query} site:ap.gov.in OR site:gov.in"
-
-    try:
-        r = requests.post(
-            "https://google.serper.dev/search",
-            headers={"X-API-KEY": key, "Content-Type": "application/json"},
-            json={"q": query, "num": 3},
-            timeout=10,
-        )
-        return "\n".join(
-            [
-                f"Source: {x.get('link')}\nSnippet: {x.get('snippet')}\n"
-                for x in r.json().get("organic", [])
-            ]
-        )
-    except Exception:
-        return ""
-
-
-# ============================================================
-# AUDIT LOG
+# AUDIT LOGGING
 # ============================================================
 def audit_log(email, action, rtype, rid=None, meta=None):
     sb = globals().get("supabase")
@@ -1088,20 +1013,21 @@ class StorageSystem:
     def _upload_to_storage(self, data: bytes, key: str, tier: str) -> bool:
         try:
             if tier == "hot" and self.r2:
-                self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data)
+                self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data, CacheControl="31536000")
                 return True
 
             if tier == "cold" and self.b2:
-                self.b2.get_bucket_by_name(self.cold_bucket).upload_bytes(data, key)
+                self.b2.put_object(Bucket=self.cold_bucket, Key=key, Body=data, CacheControl="31536000")
                 return True
 
             if self.r2:
-                self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data)
+                self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data, CacheControl="31536000")
                 return True
 
             if self.minio:
                 self.minio.put_object(Bucket=self.minio_bucket, Key=key, Body=data)
                 return True
+
         except Exception as e:
             logger.error(f"Cloud storage upload failed, falling back to local: {e}")
 
@@ -1117,7 +1043,7 @@ class StorageSystem:
 
             if tier == "cold" and self.b2:
                 try:
-                    return self.b2.get_bucket_by_name(self.cold_bucket).download_file_by_name(key).as_bytes()
+                    return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
                 except Exception:
                     pass
 
@@ -1126,6 +1052,7 @@ class StorageSystem:
                     return self.minio.get_object(Bucket=self.minio_bucket, Key=key)["Body"].read()
                 except Exception:
                     pass
+
         except Exception as e:
             logger.error(f"Cloud storage download failed: {e}")
 
@@ -1139,8 +1066,24 @@ class StorageSystem:
                     Params={"Bucket": self.hot_bucket, "Key": key},
                     ExpiresIn=expiration,
                 )
+
+            if tier == "cold" and self.b2:
+                return self.b2.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.cold_bucket, "Key": key},
+                    ExpiresIn=expiration,
+                )
+
+            if self.minio:
+                return self.minio.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.minio_bucket, "Key": key},
+                    ExpiresIn=expiration,
+                )
+
         except Exception as e:
             logger.error(f"Presigned URL failed: {e}")
+
         return None
 
     def _extract_text(self, file_data: bytes, filename: str) -> str:
@@ -1194,34 +1137,17 @@ class StorageSystem:
             filename = sanitize_filename(filename)
             file_hash = generate_file_hash(file_data)
 
-            # Duplicate check in Supabase
-            if supabase:
-                try:
-                    existing = supabase.table("documents").select("id").eq("file_hash", file_hash).execute()
-                    if existing.data:
-                        ref_id = existing.data[0].get("id")
-                        try:
-                            supabase.table("document_references").insert(
-                                {
-                                    "original_doc_id": ref_id,
-                                    "referenced_by": user_email,
-                                    "original_filename": filename,
-                                    "created_at": now_utc().isoformat(),
-                                }
-                            ).execute()
-                        except Exception:
-                            pass
+            existing_file = None
+            sb = globals().get("supabase")
 
-                        audit_log(user_email, "document.duplicate", "document", ref_id)
-                        business_metrics.increment("documents_uploaded")
-                        return {
-                            "success": True,
-                            "duplicate": True,
-                            "document_id": ref_id,
-                            "message": f"File already exists. Saved {len(file_data)/1024/1024:.2f} MB",
-                        }
+            # Two-tier deduplication check
+            if sb:
+                try:
+                    res = sb.table("files").select("id").eq("sha256_hash", file_hash).execute()
+                    if res.data:
+                        existing_file = res.data[0]
                 except Exception:
-                    pass
+                    existing_file = None
             else:
                 existing_local = next((d for d in read_local_documents() if d.get("file_hash") == file_hash), None)
                 if existing_local:
@@ -1232,8 +1158,38 @@ class StorageSystem:
                         "message": "File already exists in local storage.",
                     }
 
+            if existing_file:
+                file_id = existing_file.get("id")
+
+                if sb:
+                    try:
+                        sb.table("user_documents").insert(
+                            {
+                                "user_id": user_email,
+                                "file_id": file_id,
+                                "original_filename": filename,
+                                "doc_type": doc_type,
+                                "status": "flagged_duplicate",
+                                "is_duplicate": True,
+                                "created_at": now_utc().isoformat(),
+                            }
+                        ).execute()
+                    except Exception:
+                        pass
+
+                audit_log(user_email, "document.duplicate", "document", file_id)
+                business_metrics.increment("documents_uploaded")
+
+                return {
+                    "success": True,
+                    "duplicate": True,
+                    "document_id": file_id,
+                    "message": "File already exists. Linked to your account.",
+                }
+
             extracted_text = self._extract_text(file_data, filename)
-            compressed_file, method = compress_data(file_data)
+
+            compressed_file, bin_method = compress_data(file_data)
             encrypted_file = encrypt_data(compressed_file)
 
             storage_key = f"blobs/{file_hash[:2]}/{file_hash[2:4]}/{file_hash}"
@@ -1242,23 +1198,30 @@ class StorageSystem:
             if not self._upload_to_storage(encrypted_file, storage_key, tier):
                 return {"success": False, "error": "Storage upload failed"}
 
-            text_key = None
+            text_b64 = None
+            text_method = "none"
+
             if extracted_text:
-                ct, tm = compress_data(extracted_text.encode("utf-8", "ignore"))
-                text_key = f"text/{doc_type}/{now_utc().strftime('%Y/%m/%d')}/{uuid.uuid4().hex}.txt.{tm}"
-                self._upload_to_storage(ct, text_key, "hot")
+                text_bytes, text_method = compress_data(extracted_text.encode("utf-8", "ignore"))
+                text_b64 = base64.b64encode(text_bytes).decode("ascii")
+
+            ratio = 0.0
+            if len(file_data) > 0:
+                ratio = max(0.0, 1 - (len(encrypted_file) / len(file_data)))
 
             doc_id = str(uuid.uuid4())
-            row = {
+
+            file_row = {
+                "sha256_hash": file_hash,
                 "filename": filename,
-                "file_key": storage_key,
-                "text_key": text_key,
-                "file_hash": file_hash,
-                "doc_type": doc_type,
-                "compression_method": method,
-                "original_size": len(file_data),
-                "compressed_size": len(encrypted_file),
+                "storage_path": storage_key,
                 "storage_tier": tier,
+                "compression_method": bin_method,
+                "original_size_bytes": len(file_data),
+                "compressed_size_bytes": len(encrypted_file),
+                "compression_ratio": ratio,
+                "extracted_text_b64": text_b64,
+                "text_compression_method": text_method,
                 "uploaded_by": user_email,
                 "uploaded_at": now_utc().isoformat(),
                 "processing_status": "pending",
@@ -1267,18 +1230,33 @@ class StorageSystem:
             }
 
             stored_in_supabase = False
-            if supabase:
+
+            if sb:
                 try:
-                    result = supabase.table("documents").insert(row).execute()
-                    if result.data:
-                        doc_id = str(result.data[0].get("id", doc_id))
-                        stored_in_supabase = True
+                    file_res = sb.table("files").insert(file_row).execute()
+                    if file_res.data:
+                        inserted_id = file_res.data[0].get("id")
+                        if inserted_id:
+                            doc_id = str(inserted_id)
+                            stored_in_supabase = True
+
+                            sb.table("user_documents").insert(
+                                {
+                                    "user_id": user_email,
+                                    "file_id": inserted_id,
+                                    "original_filename": filename,
+                                    "doc_type": doc_type,
+                                    "status": "active",
+                                    "is_duplicate": False,
+                                    "created_at": now_utc().isoformat(),
+                                }
+                            ).execute()
                 except Exception as db_error:
-                    logger.error(f"Supabase document insert failed: {db_error}")
+                    logger.error(f"Supabase file insert failed: {db_error}")
 
             if not stored_in_supabase:
-                row["id"] = doc_id
-                if not append_local_document(row):
+                file_row["id"] = doc_id
+                if not append_local_document(file_row):
                     return {"success": False, "error": "Local metadata storage unavailable"}
 
             audit_log(user_email, "document.upload", "document", doc_id, {"filename": filename})
@@ -1287,42 +1265,48 @@ class StorageSystem:
             if stored_in_supabase and doc_id and extracted_text:
                 def bg_task(did, text, fn):
                     try:
-                        summary = ai_system.summarize(text[:3000]) if text and len(text) > 50 else ""
-                        if supabase and summary:
-                            supabase.table("documents").update(
-                                {"ai_summary": summary, "processing_status": "ready"}
+                        ai = globals().get("ai_system")
+                        summary = ai.summarize(text[:3000]) if ai and text and len(text) > 50 else ""
+
+                        if sb and summary:
+                            sb.table("files").update(
+                                {
+                                    "ai_summary": summary,
+                                    "processing_status": "ready",
+                                }
                             ).eq("id", did).execute()
 
-                        if text and qdrant_client:
-                            qdrant_client.upsert(
-                                collection_name="rta_documents",
-                                points=[
-                                    PointStruct(
-                                        id=str(did),
-                                        vector=generate_embedding(text),
-                                        payload={"doc_id": str(did), "filename": fn},
-                                    )
-                                ],
-                            )
+                        gen = globals().get("generate_embedding")
+                        if QDRANT_AVAILABLE and qdrant_client and gen and text:
+                            try:
+                                qdrant_client.upsert(
+                                    collection_name="rta_documents",
+                                    points=[
+                                        PointStruct(
+                                            id=str(did),
+                                            vector=gen(text),
+                                            payload={"doc_id": str(did), "filename": fn},
+                                        )
+                                    ],
+                                )
+                            except Exception:
+                                pass
+
                     except Exception as e:
                         logger.error(f"Background AI task failed: {e}")
-                        if supabase:
+                        if sb:
                             try:
-                                supabase.table("documents").update({"processing_status": "failed"}).eq("id", did).execute()
+                                sb.table("files").update({"processing_status": "failed"}).eq("id", did).execute()
                             except Exception:
                                 pass
 
                 threading.Thread(target=bg_task, args=(doc_id, extracted_text, filename), daemon=True).start()
 
-            elif stored_in_supabase and supabase:
+            elif stored_in_supabase and sb:
                 try:
-                    supabase.table("documents").update({"processing_status": "ready"}).eq("id", doc_id).execute()
+                    sb.table("files").update({"processing_status": "ready"}).eq("id", doc_id).execute()
                 except Exception:
                     pass
-
-            ratio = 0.0
-            if len(file_data) > 0:
-                ratio = max(0.0, 1 - (len(encrypted_file) / len(file_data)))
 
             return {
                 "success": True,
@@ -1338,12 +1322,14 @@ class StorageSystem:
         try:
             doc = None
             source = None
+            sb = globals().get("supabase")
 
-            if supabase:
+            if sb:
                 try:
-                    result = supabase.table("documents").select(
-                        "id, file_key, storage_tier, compression_method, access_count"
+                    result = sb.table("files").select(
+                        "id, storage_path, storage_tier, compression_method, access_count"
                     ).eq("id", document_id).execute()
+
                     if result.data:
                         doc = result.data[0]
                         source = "supabase"
@@ -1351,21 +1337,24 @@ class StorageSystem:
                     doc = None
 
             if not doc:
-                doc = next((d for d in read_local_documents() if str(d.get("id")) == str(document_id)), None)
+                doc = get_local_document_by_id(document_id)
                 source = "local"
 
             if not doc:
                 return None
 
-            data = self._download_from_storage(doc.get("file_key"), doc.get("storage_tier", "hot"))
+            data = self._download_from_storage(doc.get("storage_path"), doc.get("storage_tier", "hot"))
             if not data:
                 return None
 
-            if source == "supabase" and supabase:
+            if source == "supabase" and sb:
                 try:
                     count = int(doc.get("access_count", 0) or 0)
-                    supabase.table("documents").update(
-                        {"access_count": count + 1, "last_accessed": now_utc().isoformat()}
+                    sb.table("files").update(
+                        {
+                            "access_count": count + 1,
+                            "last_accessed": now_utc().isoformat(),
+                        }
                     ).eq("id", document_id).execute()
                 except Exception:
                     pass
@@ -1379,37 +1368,29 @@ class StorageSystem:
 
     def get_full_text(self, document_id: str) -> str:
         try:
-            text_key = None
+            sb = globals().get("supabase")
 
-            if supabase:
+            if sb:
                 try:
-                    result = supabase.table("documents").select("text_key").eq("id", document_id).execute()
-                    if result.data and result.data[0].get("text_key"):
-                        text_key = result.data[0]["text_key"]
+                    result = sb.table("files").select(
+                        "extracted_text_b64, text_compression_method"
+                    ).eq("id", document_id).execute()
+
+                    if result.data and result.data[0].get("extracted_text_b64"):
+                        b64_text = result.data[0]["extracted_text_b64"]
+                        method = result.data[0].get("text_compression_method", "none")
+                        raw = base64.b64decode(b64_text)
+                        return decompress_data(raw, method).decode("utf-8", "ignore")
                 except Exception:
-                    text_key = None
+                    pass
 
-            if not text_key:
-                doc = next((d for d in read_local_documents() if str(d.get("id")) == str(document_id)), None)
-                if doc:
-                    text_key = doc.get("text_key")
+            local_doc = get_local_document_by_id(document_id)
+            if local_doc and local_doc.get("extracted_text_b64"):
+                raw = base64.b64decode(local_doc["extracted_text_b64"])
+                method = local_doc.get("text_compression_method", "none")
+                return decompress_data(raw, method).decode("utf-8", "ignore")
 
-            if not text_key:
-                return ""
-
-            method = "none"
-            if text_key.endswith(".lzma"):
-                method = "lzma"
-            elif text_key.endswith(".gz"):
-                method = "gzip"
-            elif text_key.endswith(".zstd"):
-                method = "zstd"
-
-            raw = self._download_from_storage(text_key, "hot")
-            if not raw:
-                return ""
-
-            return decompress_data(raw, method).decode("utf-8", "ignore")
+            return ""
 
         except Exception as e:
             logger.error(f"Text retrieval failed: {e}")
@@ -1422,14 +1403,16 @@ storage_system = StorageSystem()
 # AUTO TIERING
 # ============================================================
 def auto_tier_documents():
-    if not supabase:
+    sb = globals().get("supabase")
+    if not sb:
         return {"error": "Supabase unavailable"}
 
     try:
         cutoff = (now_utc() - timedelta(days=90)).isoformat()
+
         cold_candidates = (
-            supabase.table("documents")
-            .select("id, file_key")
+            sb.table("files")
+            .select("id, storage_path")
             .eq("storage_tier", "hot")
             .lt("last_accessed", cutoff)
             .limit(100)
@@ -1438,21 +1421,23 @@ def auto_tier_documents():
         )
 
         moved_cold = 0
+
         for d in cold_candidates:
-            data = storage_system._download_from_storage(d["file_key"], "hot")
-            if data and storage_system._upload_to_storage(data, d["file_key"], "cold"):
+            data = storage_system._download_from_storage(d["storage_path"], "hot")
+
+            if data and storage_system._upload_to_storage(data, d["storage_path"], "cold"):
                 try:
                     if r2_client:
-                        r2_client.delete_object(Bucket=storage_system.hot_bucket, Key=d["file_key"])
+                        r2_client.delete_object(Bucket=storage_system.hot_bucket, Key=d["storage_path"])
                 except Exception:
                     pass
 
-                supabase.table("documents").update({"storage_tier": "cold"}).eq("id", d["id"]).execute()
+                sb.table("files").update({"storage_tier": "cold"}).eq("id", d["id"]).execute()
                 moved_cold += 1
 
         hot_candidates = (
-            supabase.table("documents")
-            .select("id, file_key")
+            sb.table("files")
+            .select("id, storage_path")
             .eq("storage_tier", "cold")
             .gte("access_count", 10)
             .limit(50)
@@ -1461,39 +1446,107 @@ def auto_tier_documents():
         )
 
         moved_hot = 0
+
         for d in hot_candidates:
-            data = storage_system._download_from_storage(d["file_key"], "cold")
-            if data and storage_system._upload_to_storage(data, d["file_key"], "hot"):
+            data = storage_system._download_from_storage(d["storage_path"], "cold")
+
+            if data and storage_system._upload_to_storage(data, d["storage_path"], "hot"):
                 try:
                     if b2_client:
-                        b2_client.get_bucket_by_name(storage_system.cold_bucket).delete_file_name(d["file_key"])
+                        b2_client.delete_object(Bucket=storage_system.cold_bucket, Key=d["storage_path"])
                 except Exception:
                     pass
 
-                supabase.table("documents").update({"storage_tier": "hot", "access_count": 0}).eq("id", d["id"]).execute()
+                sb.table("files").update(
+                    {
+                        "storage_tier": "hot",
+                        "access_count": 0,
+                    }
+                ).eq("id", d["id"]).execute()
+
                 moved_hot += 1
 
         return {"moved_to_cold": moved_cold, "moved_to_hot": moved_hot}
 
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e)} 
+# ============================================================
+# METRIC HELPER
+# ============================================================
+def increment_system_metric(metric_name: str, amount: int = 1):
+    sb = globals().get("supabase")
+    if not sb:
+        return
+
+    try:
+        res = sb.table("system_metrics").select("metric_value").eq("metric_name", metric_name).execute()
+
+        if res.data:
+            current = int(res.data[0].get("metric_value", 0) or 0)
+            sb.table("system_metrics").update(
+                {"metric_value": current + amount}
+            ).eq("metric_name", metric_name).execute()
+        else:
+            sb.table("system_metrics").insert(
+                {
+                    "metric_name": metric_name,
+                    "metric_value": amount,
+                }
+            ).execute()
+    except Exception:
+        pass
 
 
 # ============================================================
-# SEARCH
+# VECTOR EMBEDDINGS
+# ============================================================
+def generate_embedding(text: str) -> List[float]:
+    dim = 384
+    text = str(text or "")[:1500]
+
+    key = get_setting("GEMINI_EMBEDDING_KEY") or get_setting("GEMINI_API_KEY")
+
+    if key:
+        try:
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={key}",
+                json={"content": {"parts": [{"text": text}]}},
+                timeout=10,
+            )
+
+            if r.status_code == 200:
+                vals = list(r.json().get("embedding", {}).get("values", []))[:dim]
+                return vals + [0.0] * (dim - len(vals))
+        except Exception:
+            pass
+
+    words = text.lower().split()
+    v = np.zeros(dim)
+
+    for w in words:
+        v[int(hashlib.md5(w.encode("utf-8", "ignore")).hexdigest()[:8], 16) % dim] += 1
+
+    n = np.linalg.norm(v)
+    return (v / n if n > 0 else v).tolist()
+
+
+# ============================================================
+# SEARCH DOCUMENTS
 # ============================================================
 def search_documents(query: str, limit: int = 10) -> List[Dict]:
     q = sanitize_search_query(query)
+    sb = globals().get("supabase")
 
-    if FUZZY_AVAILABLE and supabase:
+    if FUZZY_AVAILABLE and sb:
         try:
             docs = (
-                supabase.table("documents")
-                .select("id, filename, file_key, storage_tier, doc_type, ai_summary, uploaded_at")
+                sb.table("files")
+                .select("id, filename, storage_path, storage_tier, ai_summary, uploaded_at, compressed_size_bytes")
                 .limit(200)
                 .execute()
                 .data or []
             )
+
             if docs:
                 matches = process.extract(
                     q,
@@ -1501,24 +1554,28 @@ def search_documents(query: str, limit: int = 10) -> List[Dict]:
                     scorer=fuzz.token_sort_ratio,
                     limit=limit,
                 )
+
                 ids = [docs[m[2]].get("id") for m in matches if m[1] >= 60]
+
                 if ids:
                     return [d for d in docs if d.get("id") in ids]
         except Exception:
             pass
 
-    if qdrant_client and supabase:
+    if qdrant_client and sb:
         try:
             hits = qdrant_client.search(
                 collection_name="rta_documents",
                 query_vector=generate_embedding(q),
                 limit=limit,
             )
+
             ids = [h.payload.get("doc_id") for h in hits if h.payload]
+
             if ids:
                 return (
-                    supabase.table("documents")
-                    .select("id, filename, file_key, storage_tier, doc_type, ai_summary, uploaded_at")
+                    sb.table("files")
+                    .select("id, filename, storage_path, storage_tier, ai_summary, uploaded_at, compressed_size_bytes")
                     .in_("id", ids)
                     .execute()
                     .data or []
@@ -1526,12 +1583,12 @@ def search_documents(query: str, limit: int = 10) -> List[Dict]:
         except Exception:
             pass
 
-    if q and supabase:
+    if q and sb:
         try:
             return (
-                supabase.table("documents")
-                .select("id, filename, file_key, storage_tier, doc_type, ai_summary, uploaded_at")
-                .ilike("filename", f"%{q}%")
+                sb.table("files")
+                .select("id, filename, storage_path, storage_tier, ai_summary, uploaded_at, compressed_size_bytes")
+                .or_(f"filename.ilike.%{q}%,ai_summary.ilike.%{q}%")
                 .limit(limit)
                 .execute()
                 .data or []
@@ -1540,10 +1597,298 @@ def search_documents(query: str, limit: int = 10) -> List[Dict]:
             pass
 
     local_docs = read_local_documents()
+
     if q:
-        return [d for d in local_docs if q.lower() in str(d.get("filename", "")).lower()][:limit]
+        return [
+            d for d in local_docs
+            if q.lower() in str(d.get("filename", "")).lower()
+        ][:limit]
 
     return sorted(local_docs, key=lambda x: str(x.get("uploaded_at", "")), reverse=True)[:limit]
+
+
+# ============================================================
+# MULTI AI SYSTEM
+# ============================================================
+gemini_breaker = CircuitBreaker("gemini")
+openai_breaker = CircuitBreaker("openai")
+anthropic_breaker = CircuitBreaker("anthropic")
+
+
+class MultiAI:
+    def get_providers(self):
+        providers = []
+
+        for name, key_name in [
+            ("Gemini", "GEMINI_API_KEY"),
+            ("OpenAI", "OPENAI_API_KEY"),
+            ("Anthropic", "ANTHROPIC_API_KEY"),
+        ]:
+            k = get_setting(key_name)
+            if k:
+                providers.append({"name": name, "key": k.strip()})
+
+        return providers
+
+    def _call_gemini(self, prompt, key):
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=15,
+        )
+
+        if r.status_code == 200:
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+        if r.status_code == 429:
+            raise Exception("Rate limited")
+
+        return None
+
+    def _call_openai(self, prompt, key):
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=15,
+        )
+
+        if r.status_code == 200:
+            return r.json()["choices"][0]["message"]["content"].strip()
+
+        if r.status_code == 429:
+            raise Exception("Rate limited")
+
+        return None
+
+    def _call_anthropic(self, prompt, key):
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model": "claude-3-haiku-20240307",
+                "max_tokens": 500,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=15,
+        )
+
+        if r.status_code == 200:
+            return r.json()["content"][0]["text"].strip()
+
+        if r.status_code == 429:
+            raise Exception("Rate limited")
+
+        return None
+
+    def request(self, prompt: str, language: str = "English"):
+        business_metrics.increment("ai_queries_total")
+
+        prompt = str(prompt or "")
+        if not prompt:
+            return {"success": False, "error": "Empty prompt"}
+
+        if language and language != "English":
+            prompt += f"\n\nIMPORTANT: Respond strictly in {language}."
+
+        h = hashlib.md5(prompt.encode("utf-8", "ignore")).hexdigest()
+
+        if redis_client:
+            try:
+                c = redis_client.get(f"ai_cache:{h}")
+                if isinstance(c, bytes):
+                    c = c.decode("utf-8", "ignore")
+
+                if c:
+                    business_metrics.increment("ai_queries_cached")
+                    return {
+                        "success": True,
+                        "response": json.loads(c),
+                        "provider": "cache",
+                    }
+            except Exception:
+                pass
+
+        if qdrant_client:
+            try:
+                hits = qdrant_client.search(
+                    collection_name="ai_semantic_cache",
+                    query_vector=generate_embedding(prompt),
+                    limit=1,
+                    score_threshold=0.90,
+                )
+
+                if hits:
+                    business_metrics.increment("ai_queries_cached")
+                    return {
+                        "success": True,
+                        "response": hits[0].payload.get("response"),
+                        "provider": "semantic_cache",
+                    }
+            except Exception:
+                pass
+
+        for provider in self.get_providers():
+            try:
+                resp = None
+
+                if provider["name"] == "Gemini":
+                    resp = gemini_breaker.call(self._call_gemini, prompt, provider["key"])
+                elif provider["name"] == "OpenAI":
+                    resp = openai_breaker.call(self._call_openai, prompt, provider["key"])
+                elif provider["name"] == "Anthropic":
+                    resp = anthropic_breaker.call(self._call_anthropic, prompt, provider["key"])
+
+                if resp:
+                    if redis_client:
+                        try:
+                            redis_client.setex(f"ai_cache:{h}", 86400, json.dumps(resp))
+                        except Exception:
+                            pass
+
+                    if qdrant_client:
+                        try:
+                            qdrant_client.upsert(
+                                collection_name="ai_semantic_cache",
+                                points=[
+                                    PointStruct(
+                                        id=uuid.uuid4().hex,
+                                        vector=generate_embedding(prompt),
+                                        payload={"query": prompt, "response": resp},
+                                    )
+                                ],
+                            )
+                        except Exception:
+                            pass
+
+                    est_tokens = (len(prompt) + len(str(resp))) // 4
+                    increment_system_metric("ai_requests_total", 1)
+                    increment_system_metric("ai_tokens_estimated", est_tokens)
+
+                    return {
+                        "success": True,
+                        "response": resp,
+                        "provider": provider["name"],
+                    }
+
+            except Exception:
+                continue
+
+        return {"success": False, "error": "All providers failed"}
+
+    def summarize(self, text: str):
+        r = self.request(f"Summarize: {str(text or '')[:3000]}")
+        return r.get("response") if r.get("success") else None
+
+
+ai_system = MultiAI()
+
+
+# ============================================================
+# AGENTIC WEB SEARCH
+# ============================================================
+def agentic_web_search(query: str, stype: str = "gov", allowed_domains=None) -> str:
+    key = get_setting("SERPER_API_KEY")
+    if not key:
+        return ""
+
+    query = str(query or "").strip()
+    if not query:
+        return ""
+
+    if allowed_domains:
+        domains = list(dict.fromkeys([d for d in allowed_domains if d]))[:5]
+        if domains:
+            query += " " + " OR ".join([f"site:{d}" for d in domains])
+    elif stype == "gov":
+        query = f"{query} site:ap.gov.in OR site:gov.in"
+
+    try:
+        r = requests.post(
+            "https://google.serper.dev/search",
+            headers={
+                "X-API-KEY": key,
+                "Content-Type": "application/json",
+            },
+            json={"q": query, "num": 5},
+            timeout=10,
+        )
+
+        return "\n".join(
+            [
+                f"Source: {x.get('link')}\nSnippet: {x.get('snippet')}\n"
+                for x in r.json().get("organic", [])
+            ]
+        )
+    except Exception:
+        return ""
+
+
+# ============================================================
+# CASCADING SEARCH
+# ============================================================
+def cascading_search(query: str, language: str = "English", limit: int = 5) -> List[Dict]:
+    q = sanitize_search_query(query)
+    results = []
+
+    try:
+        docs = search_documents(q, limit)
+        for d in docs:
+            results.append(
+                {
+                    "id": d.get("id"),
+                    "filename": d.get("filename", "Document"),
+                    "ai_summary": d.get("ai_summary") or "",
+                    "source": "internal",
+                }
+            )
+    except Exception:
+        pass
+
+    training_links = get_training_links()
+
+    if training_links:
+        trusted_lines = "\n".join(
+            [
+                f"- {l.get('title', 'Source')}: {l.get('url', '')}"
+                for l in training_links
+            ]
+        )
+
+        results.append(
+            {
+                "id": "training_links",
+                "filename": "Trusted Sources",
+                "ai_summary": trusted_lines,
+                "source": "training",
+            }
+        )
+
+    if len(results) < 2:
+        domains = [l.get("domain") for l in training_links if l.get("domain")]
+
+        web = agentic_web_search(q, "gov", allowed_domains=domains)
+
+        if not web.strip():
+            web = agentic_web_search(q, "deep")
+
+        if web:
+            results.append(
+                {
+                    "id": "web",
+                    "filename": "Government Web Search",
+                    "ai_summary": web,
+                    "source": "external",
+                }
+            )
+
+    return results[:limit + 2]
 
 
 # ============================================================
@@ -1551,8 +1896,10 @@ def search_documents(query: str, limit: int = 10) -> List[Dict]:
 # ============================================================
 def hash_password(password: str) -> str:
     password = str(password or "")
+
     if BCRYPT_AVAILABLE:
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=10)).decode("utf-8")
+
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
@@ -1575,9 +1922,11 @@ def check_password(password: str, password_hash: str) -> bool:
 def get_local_admin():
     if not LOCAL_ADMIN_FILE or not os.path.exists(LOCAL_ADMIN_FILE):
         return None
+
     try:
         with open(LOCAL_ADMIN_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+
             if isinstance(data, dict) and data.get("email"):
                 data.setdefault("active", True)
                 data.setdefault("admin_level", "system_admin")
@@ -1586,12 +1935,14 @@ def get_local_admin():
                 return data
     except Exception:
         return None
+
     return None
 
 
 def save_local_admin(email: str, name: str, password: str, admin_level: str = "system_admin") -> bool:
     if not LOCAL_ADMIN_FILE:
         return False
+
     try:
         row = {
             "id": "local-admin",
@@ -1607,8 +1958,10 @@ def save_local_admin(email: str, name: str, password: str, admin_level: str = "s
             "password_hash": hash_password(password),
             "created_at": now_utc().isoformat(),
         }
+
         with open(LOCAL_ADMIN_FILE, "w", encoding="utf-8") as f:
             json.dump(row, f, indent=2)
+
         return True
     except Exception as e:
         logger.error(f"Failed to save local admin: {e}")
@@ -1616,9 +1969,11 @@ def save_local_admin(email: str, name: str, password: str, admin_level: str = "s
 
 
 def has_any_user() -> bool:
-    if supabase:
+    sb = globals().get("supabase")
+
+    if sb:
         try:
-            r = supabase.table("users").select("id").limit(1).execute()
+            r = sb.table("users").select("id").limit(1).execute()
             if r.data:
                 return True
         except Exception:
@@ -1650,13 +2005,16 @@ def create_admin_user(email: str, name: str, password: str, admin_level: str = "
         "password_hash": hash_password(password),
     }
 
-    if supabase:
+    sb = globals().get("supabase")
+
+    if sb:
         try:
-            r = supabase.table("users").insert(user_row).execute()
+            r = sb.table("users").insert(user_row).execute()
             if r.data:
                 return {"success": True, "backend": "supabase"}
         except Exception as e:
             logger.error(f"Supabase admin creation failed: {e}")
+
             if not get_local_admin():
                 if save_local_admin(email, name, password, admin_level):
                     return {
@@ -1664,6 +2022,7 @@ def create_admin_user(email: str, name: str, password: str, admin_level: str = "
                         "backend": "local",
                         "warning": f"Supabase insert failed. Created local admin instead. Error: {e}",
                     }
+
             return {"success": False, "error": str(e)}
 
     if get_local_admin():
@@ -1691,19 +2050,23 @@ def get_user(email: str):
         except Exception:
             pass
 
-    if supabase:
+    sb = globals().get("supabase")
+
+    if sb:
         try:
-            r = supabase.table("users").select(
+            r = sb.table("users").select(
                 "id, email, name, office_code, office_name, designation, section, seat_number, admin_level, active, password_hash"
             ).eq("email", email).execute()
 
             if r.data:
                 u = r.data[0]
+
                 if redis_client:
                     try:
                         redis_client.setex(f"user_v2:{email}", 3600, json.dumps(u, default=str))
                     except Exception:
                         pass
+
                 return u
         except Exception:
             pass
@@ -1724,17 +2087,21 @@ def login_rate_limited(email: str) -> bool:
         except Exception:
             return False
 
-    if supabase:
+    sb = globals().get("supabase")
+
+    if sb:
         try:
             cutoff = (now_utc() - timedelta(minutes=15)).isoformat()
+
             r = (
-                supabase.table("login_attempts")
+                sb.table("login_attempts")
                 .select("email")
                 .eq("email", email)
                 .gte("created_at", cutoff)
                 .limit(10)
                 .execute()
             )
+
             return len(r.data or []) >= 5
         except Exception:
             return False
@@ -1752,9 +2119,16 @@ def increment_login_attempt(email: str):
             pass
         return
 
-    if supabase:
+    sb = globals().get("supabase")
+
+    if sb:
         try:
-            supabase.table("login_attempts").insert({"email": email, "created_at": now_utc().isoformat()}).execute()
+            sb.table("login_attempts").insert(
+                {
+                    "email": email,
+                    "created_at": now_utc().isoformat(),
+                }
+            ).execute()
         except Exception:
             pass
 
@@ -1769,7 +2143,9 @@ def init_session_state():
         "logged_in": False,
         "page": "feed",
         "admin_level": "staff",
+        "maintenance_mode": False,
     }
+
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -1789,33 +2165,39 @@ def try_auto_login():
 
     h = hashlib.sha256(str(token).encode("utf-8")).hexdigest()
 
-    if not supabase:
+    sb = globals().get("supabase")
+    if not sb:
         return
 
     try:
-        r = supabase.table("sessions").select("*").eq("token_hash", h).execute()
+        r = sb.table("sessions").select("*").eq("token_hash", h).execute()
+
         if not r.data:
             return
 
         s = r.data[0]
         expires_raw = s.get("expires_at")
+
         if not expires_raw:
             return
 
         expires_at = datetime.fromisoformat(str(expires_raw).replace("Z", "+00:00"))
+
         if expires_at <= now_utc():
             return
 
         u = get_user(s.get("email"))
+
         if u and u.get("active", True):
             st.session_state.logged_in = True
             st.session_state.user = u
             st.session_state.admin_level = u.get("admin_level", "staff")
         elif u and not u.get("active", True):
             try:
-                supabase.table("sessions").delete().eq("token_hash", h).execute()
+                sb.table("sessions").delete().eq("token_hash", h).execute()
             except Exception:
                 pass
+
             cookies.delete(COOKIE_NAME)
     except Exception:
         pass
@@ -1829,15 +2211,18 @@ def do_login(u: Dict):
     token = secrets.token_urlsafe(32)
     h = hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    if supabase:
+    sb = globals().get("supabase")
+
+    if sb:
         try:
-            supabase.table("sessions").insert(
+            sb.table("sessions").insert(
                 {
                     "token_hash": h,
                     "email": u.get("email"),
                     "expires_at": (now_utc() + timedelta(days=SESSION_DAYS)).isoformat(),
                 }
             ).execute()
+
             cookies.set(COOKIE_NAME, token, max_age=SESSION_DAYS * 24 * 3600)
         except Exception:
             pass
@@ -1849,6 +2234,7 @@ def do_login(u: Dict):
 
 def logout():
     h = None
+
     try:
         token = cookies.get(COOKIE_NAME)
         if token:
@@ -1856,9 +2242,11 @@ def logout():
     except Exception:
         pass
 
-    if supabase and h:
+    sb = globals().get("supabase")
+
+    if sb and h:
         try:
-            supabase.table("sessions").delete().eq("token_hash", h).execute()
+            sb.table("sessions").delete().eq("token_hash", h).execute()
         except Exception:
             pass
 
@@ -1866,12 +2254,17 @@ def logout():
     audit_log(email, "user.logout", "user", None)
 
     st.session_state.clear()
-    cookies.delete(COOKIE_NAME)
+
+    try:
+        cookies.delete(COOKIE_NAME)
+    except Exception:
+        pass
+
     st.rerun()
 
 
 # ============================================================
-# SOCIAL HELPERS
+# SOCIAL FEED HELPERS
 # ============================================================
 def extract_mentions(content: str):
     pattern = r"@([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"
@@ -1884,10 +2277,13 @@ def extract_hashtags(content: str):
 
 
 def send_notification(recipient_email, sender_email, ntype, post_id, message):
-    if not supabase:
+    sb = globals().get("supabase")
+
+    if not sb:
         return
+
     try:
-        supabase.table("notifications").insert(
+        sb.table("notifications").insert(
             {
                 "recipient_email": recipient_email,
                 "sender_email": sender_email,
@@ -1914,6 +2310,7 @@ def is_maintenance_mode() -> bool:
             return val == "1"
         except Exception:
             pass
+
     return bool(st.session_state.get("maintenance_mode", False))
 
 
@@ -1926,7 +2323,51 @@ def set_maintenance_mode(enabled: bool):
                 redis_client.delete("maintenance_mode")
         except Exception:
             pass
+
     st.session_state["maintenance_mode"] = enabled
+
+
+def cleanup_old_messages():
+    sb = globals().get("supabase")
+
+    if not sb:
+        return
+
+    try:
+        cutoff = (now_utc() - timedelta(hours=24)).isoformat()
+
+        sb.table("messages").delete().lt(
+            "created_at", cutoff
+        ).eq(
+            "is_starred", False
+        ).execute()
+    except Exception as e:
+        logger.error(f"Message cleanup failed: {e}")
+
+
+# ============================================================
+# MESSAGE COMPRESSION HELPERS
+# ============================================================
+def pack_message(text: str) -> str:
+    comp_bytes, method = compress_data(str(text or "").encode("utf-8", "ignore"))
+    b64 = base64.b64encode(comp_bytes).decode("ascii")
+    return f"{method}:{b64}"
+
+
+def unpack_message(payload: str) -> str:
+    if not payload:
+        return ""
+
+    try:
+        if ":" in payload:
+            method, b64 = payload.split(":", 1)
+            raw = base64.b64decode(b64)
+            return decompress_data(raw, method).decode("utf-8", "ignore")
+
+        raw = base64.b64decode(payload)
+        return decompress_data(raw, "lzma").decode("utf-8", "ignore")
+    except Exception:
+        return str(payload)
 
 
 # ============================================================
@@ -1948,7 +2389,7 @@ def bootstrap_env_admin():
 
 
 # ============================================================
-# PAGES
+# UI PAGES
 # ============================================================
 def show_initial_admin_setup():
     st.markdown("### 🔐 First-Time System Admin Setup")
@@ -1971,9 +2412,11 @@ def show_initial_admin_setup():
                 show_toast("Passwords do not match", "error")
             else:
                 res = create_admin_user(email, name, password, "system_admin")
+
                 if res.get("success"):
                     if res.get("warning"):
                         st.warning(res["warning"])
+
                     show_toast("System admin created. Please sign in.")
                     st.rerun()
                 else:
@@ -1986,10 +2429,20 @@ def show_login():
         st.divider()
 
     quotes = [
-        {"text": "Service to the public is service to the nation", "author": "Mahatma Gandhi"},
-        {"text": "Together we move Andhra forward", "author": "RTA Mission"},
-        {"text": "Every file processed is a citizen served", "author": "RTA Vision"},
+        {
+            "text": "Service to the public is service to the nation",
+            "author": "Mahatma Gandhi",
+        },
+        {
+            "text": "Together we move Andhra forward",
+            "author": "RTA Mission",
+        },
+        {
+            "text": "Every file processed is a citizen served",
+            "author": "RTA Vision",
+        },
     ]
+
     q = quotes[int(time.time()) % len(quotes)]
 
     st.markdown(
@@ -2000,6 +2453,7 @@ def show_login():
                 <h1 style="color:#0A66C2;">RTA Anubandhan</h1>
                 <p style="color:#666;">Government Workspace Platform</p>
             </div>
+
             <div class="quote-box">
                 <p style="font-style:italic;">"{q['text']}"</p>
                 <small>- {q['author']}</small>
@@ -2010,6 +2464,7 @@ def show_login():
     )
 
     c1, c2, c3 = st.columns([1, 2, 1])
+
     with c2:
         email = st.text_input("Email", key="login_email").strip().lower()
         password = st.text_input("Password", type="password", key="login_password")
@@ -2023,6 +2478,7 @@ def show_login():
                 show_toast("Too many attempts. Try again later.", "error")
             else:
                 u = get_user(email)
+
                 if u and u.get("active", True) and check_password(password, u.get("password_hash", "")):
                     do_login(u)
                 else:
@@ -2032,18 +2488,23 @@ def show_login():
 
 def show_feed():
     u = st.session_state.user or {}
+
     if not u:
         return
 
     hour = now_utc().hour
     g = "☀️ Good Morning" if hour < 12 else "🌤️ Hello" if hour < 17 else "🌙 Good Evening"
+
     st.markdown(f"### {g}, {u.get('name', 'User')}!")
     st.caption(f"📍 {u.get('office_name', 'Office')} | {u.get('designation', 'Staff')}")
 
-    if supabase:
+    sb = globals().get("supabase")
+
+    # Announcements
+    if sb:
         try:
             anns = (
-                supabase.table("announcements")
+                sb.table("announcements")
                 .select("*")
                 .gt("expires_at", now_utc().isoformat())
                 .order("created_at", desc=True)
@@ -2051,8 +2512,14 @@ def show_feed():
                 .execute()
                 .data or []
             )
+
             for ann in anns:
-                icon = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}.get(ann.get("priority", "info"), "ℹ️")
+                icon = {
+                    "info": "ℹ️",
+                    "warning": "⚠️",
+                    "critical": "🚨",
+                }.get(ann.get("priority", "info"), "ℹ️")
+
                 st.markdown(
                     f"""
                     <div class="announcement-card">
@@ -2067,22 +2534,38 @@ def show_feed():
         except Exception:
             pass
 
+    # Search and tag filter
     col1, col2 = st.columns([3, 1])
+
     with col1:
-        search_q = st.text_input("🔍 Search posts", placeholder="Search posts", key="feed_search")
+        search_q = st.text_input(
+            "🔍 Search posts",
+            placeholder="Search by keyword, @mention, or #tag",
+            key="feed_search",
+        )
+
     with col2:
         filter_tag = "All"
+
         try:
-            if supabase:
-                tags = supabase.table("post_tags").select("tag").execute().data or []
+            if sb:
+                tags = sb.table("post_tags").select("tag").execute().data or []
+
                 tag_counts = {}
                 for t in tags:
                     tag_counts[t.get("tag")] = tag_counts.get(t.get("tag"), 0) + 1
+
                 top_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:5]
-                filter_tag = st.selectbox("Filter by Tag", ["All"] + [f"#{t[0]}" for t in top_tags if t[0]], key="tag_filter")
+
+                filter_tag = st.selectbox(
+                    "Filter by Tag",
+                    ["All"] + [f"#{t[0]}" for t in top_tags if t[0]],
+                    key="tag_filter",
+                )
         except Exception:
             filter_tag = "All"
 
+    # Create post
     with st.form("post_form", clear_on_submit=False):
         content = st.text_area(
             "What's on your mind?",
@@ -2090,24 +2573,32 @@ def show_feed():
             height=100,
             key="post_content",
         )
-        post_type = st.selectbox("Post Type", ["📝 Update", "📢 Announcement", "❓ Question", "🎉 Celebration", "📅 Event"], key="post_type")
+
+        post_type = st.selectbox(
+            "Post Type",
+            ["📝 Update", "📢 Announcement", "❓ Question", "🎉 Celebration", "📅 Event"],
+            key="post_type",
+        )
 
         col_a1, col_a2 = st.columns(2)
+
         with col_a1:
             file_upload = st.file_uploader("📎 Attachment", type=["jpg", "png", "pdf"], key="post_file")
+
         with col_a2:
             is_pinned = st.checkbox("📌 Pin Post", key="post_pin") if u.get("admin_level") != "staff" else False
 
         submitted = st.form_submit_button("📤 Post")
 
         if submitted and content.strip():
-            if not supabase:
+            if not sb:
                 show_toast("Supabase is not configured. Social feed storage is unavailable.", "warning")
             else:
                 content_clean = sanitize_input(content)
                 post_id = None
+
                 try:
-                    result = supabase.table("social_posts").insert(
+                    result = sb.table("social_posts").insert(
                         {
                             "author_email": u.get("email"),
                             "content": content_clean,
@@ -2122,9 +2613,15 @@ def show_feed():
                         post_id = result.data[0].get("id")
 
                         if file_upload:
-                            file_result = storage_system.upload_document(file_upload.read(), file_upload.name, "social_post", u.get("email"))
+                            file_result = storage_system.upload_document(
+                                file_upload.read(),
+                                file_upload.name,
+                                "social_post",
+                                u.get("email"),
+                            )
+
                             if file_result.get("success"):
-                                supabase.table("social_posts").update(
+                                sb.table("social_posts").update(
                                     {
                                         "file_key": file_result.get("document_id"),
                                         "filename": file_upload.name,
@@ -2133,14 +2630,26 @@ def show_feed():
 
                         for tag in extract_hashtags(content):
                             try:
-                                supabase.table("post_tags").insert({"post_id": post_id, "tag": tag.lower()}).execute()
+                                sb.table("post_tags").insert(
+                                    {
+                                        "post_id": post_id,
+                                        "tag": tag.lower(),
+                                    }
+                                ).execute()
                             except Exception:
                                 pass
 
                         for mention_email in extract_mentions(content):
                             mentioned_user = get_user(mention_email)
+
                             if mentioned_user:
-                                send_notification(mention_email, u.get("email"), "mention", post_id, f"{u.get('name')} mentioned you in a post")
+                                send_notification(
+                                    mention_email,
+                                    u.get("email"),
+                                    "mention",
+                                    post_id,
+                                    f"{u.get('name')} mentioned you in a post",
+                                )
 
                         audit_log(u.get("email"), "post.create", "post", post_id)
                         show_toast("Posted successfully!")
@@ -2149,47 +2658,71 @@ def show_feed():
                 except Exception as e:
                     show_toast(f"Failed to post: {str(e)}", "error")
 
+    # Load posts
     posts = []
+
     try:
-        if supabase:
-            if search_q:
-                search_sql = sanitize_search_query(search_q)
+        if search_q:
+            search_sql = sanitize_search_query(search_q)
+
+            posts = (
+                sb.table("social_posts")
+                .select("*, users(name, designation)")
+                .or_(f"content.ilike.%{search_sql}%,author_email.ilike.%{search_sql}%")
+                .order("is_pinned", desc=True)
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+                .data or []
+            )
+
+        elif filter_tag != "All":
+            selected_tag = str(filter_tag).replace("#", "").lower()
+
+            tag_posts = (
+                sb.table("post_tags")
+                .select("post_id")
+                .eq("tag", selected_tag)
+                .execute()
+                .data or []
+            )
+
+            if tag_posts:
+                post_ids = [p.get("post_id") for p in tag_posts if p.get("post_id")]
+
                 posts = (
-                    supabase.table("social_posts")
+                    sb.table("social_posts")
                     .select("*, users(name, designation)")
-                    .or_(f"content.ilike.%{search_sql}%,author_email.ilike.%{search_sql}%")
+                    .in_("id", post_ids)
                     .order("is_pinned", desc=True)
                     .order("created_at", desc=True)
-                    .limit(50)
                     .execute()
                     .data or []
                 )
-            elif filter_tag != "All":
-                selected_tag = str(filter_tag).replace("#", "").lower()
-                tag_posts = supabase.table("post_tags").select("post_id").eq("tag", selected_tag).execute().data or []
-                if tag_posts:
-                    post_ids = [p.get("post_id") for p in tag_posts if p.get("post_id")]
-                    posts = (
-                        supabase.table("social_posts")
-                        .select("*, users(name, designation)")
-                        .in_("id", post_ids)
-                        .order("is_pinned", desc=True)
-                        .order("created_at", desc=True)
-                        .execute()
-                        .data or []
-                    )
-            else:
-                posts = (
-                    supabase.table("social_posts")
-                    .select("*, users(name, designation)")
-                    .order("is_pinned", desc=True)
-                    .order("created_at", desc=True)
-                    .limit(50)
-                    .execute()
-                    .data or []
-                )
+        else:
+            posts = (
+                sb.table("social_posts")
+                .select("*, users(name, designation)")
+                .order("is_pinned", desc=True)
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+                .data or []
+            )
+
     except Exception:
-        posts = []
+        try:
+            posts = (
+                sb.table("social_posts")
+                .select("*")
+                .order("is_pinned", desc=True)
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+                .data or []
+            )
+        except Exception:
+            posts = []
 
     if not posts:
         st.markdown(
@@ -2197,6 +2730,7 @@ def show_feed():
             unsafe_allow_html=True,
         )
 
+    # Render posts
     for p in posts:
         post_id = str(p.get("id", uuid.uuid4()))
         author = p.get("users") or {}
@@ -2207,64 +2741,123 @@ def show_feed():
                 st.markdown('<span class="pinned-badge">📌 PINNED</span>', unsafe_allow_html=True)
 
             col_avatar, col_info = st.columns([1, 5])
+
             with col_avatar:
-                st.markdown(f'<div class="post-avatar">{str(author_name)[0].upper()}</div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="post-avatar">{str(author_name)[0].upper()}</div>',
+                    unsafe_allow_html=True,
+                )
+
             with col_info:
                 st.markdown(f"**{author_name}**")
                 st.caption(f"{author.get('designation', '')} • {str(p.get('created_at', ''))[:16]}")
 
-            st.markdown(f'<div style="margin: 12px 0; font-size: 15px;">{html.escape(str(p.get("content", "")))}</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="margin: 12px 0; font-size: 15px;">{html.escape(str(p.get("content", "")))}</div>',
+                unsafe_allow_html=True,
+            )
 
             try:
-                if supabase:
-                    post_tags = supabase.table("post_tags").select("tag").eq("post_id", p.get("id")).execute().data or []
+                if sb:
+                    post_tags = (
+                        sb.table("post_tags")
+                        .select("tag")
+                        .eq("post_id", p.get("id"))
+                        .execute()
+                        .data or []
+                    )
+
                     if post_tags:
-                        tags_html = " ".join([f'<span class="tag-badge">#{html.escape(str(t.get("tag")))}' "</span>" for t in post_tags])
-                        st.markdown(f'<div style="margin-bottom: 8px;">{tags_html}</div>', unsafe_allow_html=True)
+                        tags_html = " ".join(
+                            [
+                                f'<span class="tag-badge">#{html.escape(str(t.get("tag")))}' "</span>"
+                                for t in post_tags
+                            ]
+                        )
+
+                        st.markdown(
+                            f'<div style="margin-bottom: 8px;">{tags_html}</div>',
+                            unsafe_allow_html=True,
+                        )
             except Exception:
                 pass
 
             attachment_doc = p.get("file_key") or p.get("document_id")
+
             if attachment_doc:
                 st.markdown(f"📎 **{p.get('filename', 'Attachment')}**")
+
                 if st.button("⬇️ Download Attachment", key=f"dl_post_{post_id}"):
                     file_data = storage_system.download_document(attachment_doc)
+
                     if file_data:
-                        st.download_button("Save to Device", file_data, file_name=p.get("filename", "file"), key=f"save_{post_id}")
+                        st.download_button(
+                            "Save to Device",
+                            file_data,
+                            file_name=p.get("filename", "file"),
+                            key=f"save_{post_id}",
+                        )
 
             st.markdown('<div class="post-actions">', unsafe_allow_html=True)
+
             col_react1, col_react2, col_react3, col_comment = st.columns(4)
 
             with col_react1:
                 like_count = 0
                 user_liked = False
+
                 try:
-                    if supabase:
-                        reactions = supabase.table("post_reactions").select("*").eq("post_id", p.get("id")).eq("reaction", "like").execute().data or []
+                    if sb:
+                        reactions = (
+                            sb.table("post_reactions")
+                            .select("*")
+                            .eq("post_id", p.get("id"))
+                            .eq("reaction", "like")
+                            .execute()
+                            .data or []
+                        )
+
                         like_count = len(reactions)
                         user_liked = any(r.get("user_email") == u.get("email") for r in reactions)
                 except Exception:
                     pass
 
-                if st.button(f"👍 {like_count}", key=f"like_{post_id}", type="primary" if user_liked else "secondary"):
+                if st.button(
+                    f"👍 {like_count}",
+                    key=f"like_{post_id}",
+                    type="primary" if user_liked else "secondary",
+                ):
                     try:
-                        if supabase:
+                        if sb:
                             existing = (
-                                supabase.table("post_reactions")
+                                sb.table("post_reactions")
                                 .select("id")
                                 .eq("post_id", p.get("id"))
                                 .eq("user_email", u.get("email"))
                                 .eq("reaction", "like")
                                 .execute()
                             )
+
                             if existing.data:
-                                supabase.table("post_reactions").delete().eq("id", existing.data[0].get("id")).execute()
+                                sb.table("post_reactions").delete().eq("id", existing.data[0].get("id")).execute()
                             else:
-                                supabase.table("post_reactions").insert(
-                                    {"post_id": p.get("id"), "user_email": u.get("email"), "reaction": "like"}
+                                sb.table("post_reactions").insert(
+                                    {
+                                        "post_id": p.get("id"),
+                                        "user_email": u.get("email"),
+                                        "reaction": "like",
+                                    }
                                 ).execute()
+
                                 if p.get("author_email") != u.get("email"):
-                                    send_notification(p.get("author_email"), u.get("email"), "reaction", p.get("id"), f"{u.get('name')} liked your post")
+                                    send_notification(
+                                        p.get("author_email"),
+                                        u.get("email"),
+                                        "reaction",
+                                        p.get("id"),
+                                        f"{u.get('name')} liked your post",
+                                    )
+
                             st.rerun()
                     except Exception as e:
                         show_toast(f"Failed: {str(e)}", "error")
@@ -2272,21 +2865,27 @@ def show_feed():
             with col_react2:
                 if st.button("👏 Appreciate", key=f"clap_{post_id}"):
                     try:
-                        if supabase:
+                        if sb:
                             existing = (
-                                supabase.table("post_reactions")
+                                sb.table("post_reactions")
                                 .select("id")
                                 .eq("post_id", p.get("id"))
                                 .eq("user_email", u.get("email"))
                                 .eq("reaction", "clap")
                                 .execute()
                             )
+
                             if existing.data:
-                                supabase.table("post_reactions").delete().eq("id", existing.data[0].get("id")).execute()
+                                sb.table("post_reactions").delete().eq("id", existing.data[0].get("id")).execute()
                             else:
-                                supabase.table("post_reactions").insert(
-                                    {"post_id": p.get("id"), "user_email": u.get("email"), "reaction": "clap"}
+                                sb.table("post_reactions").insert(
+                                    {
+                                        "post_id": p.get("id"),
+                                        "user_email": u.get("email"),
+                                        "reaction": "clap",
+                                    }
                                 ).execute()
+
                             st.rerun()
                     except Exception:
                         pass
@@ -2294,36 +2893,52 @@ def show_feed():
             with col_react3:
                 if st.button("🎉 Celebrate", key=f"celebrate_{post_id}"):
                     try:
-                        if supabase:
+                        if sb:
                             existing = (
-                                supabase.table("post_reactions")
+                                sb.table("post_reactions")
                                 .select("id")
                                 .eq("post_id", p.get("id"))
                                 .eq("user_email", u.get("email"))
                                 .eq("reaction", "celebrate")
                                 .execute()
                             )
+
                             if existing.data:
-                                supabase.table("post_reactions").delete().eq("id", existing.data[0].get("id")).execute()
+                                sb.table("post_reactions").delete().eq("id", existing.data[0].get("id")).execute()
                             else:
-                                supabase.table("post_reactions").insert(
-                                    {"post_id": p.get("id"), "user_email": u.get("email"), "reaction": "celebrate"}
+                                sb.table("post_reactions").insert(
+                                    {
+                                        "post_id": p.get("id"),
+                                        "user_email": u.get("email"),
+                                        "reaction": "celebrate",
+                                    }
                                 ).execute()
+
                             st.rerun()
                     except Exception:
                         pass
 
             comment_count = 0
+
             with col_comment:
                 try:
-                    if supabase:
-                        comments_count_rows = supabase.table("post_comments").select("id").eq("post_id", p.get("id")).execute().data or []
+                    if sb:
+                        comments_count_rows = (
+                            sb.table("post_comments")
+                            .select("id")
+                            .eq("post_id", p.get("id"))
+                            .execute()
+                            .data or []
+                        )
+
                         comment_count = len(comments_count_rows)
                 except Exception:
                     pass
 
                 if st.button(f"💬 Comment ({comment_count})", key=f"comment_btn_{post_id}"):
-                    st.session_state[f"show_comments_{post_id}"] = not st.session_state.get(f"show_comments_{post_id}", False)
+                    st.session_state[f"show_comments_{post_id}"] = not st.session_state.get(
+                        f"show_comments_{post_id}", False
+                    )
 
             st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2331,28 +2946,55 @@ def show_feed():
                 st.markdown("---")
                 st.markdown(f"#### 💬 Comments ({comment_count})")
 
-                try:
-                    if supabase:
-                        comments = supabase.table("post_comments").select("*").eq("post_id", p.get("id")).order("created_at").execute().data or []
-                        for c in comments:
-                            st.markdown(
-                                f"""
-                                <div class="comment-item">
-                                    <div><b>{html.escape(str(c.get('author_email', 'Unknown')))}</b></div>
-                                    <div>{html.escape(str(c.get('content', '')))}</div>
-                                    <div style="font-size:12px;color:#666;">{str(c.get('created_at', ''))[:16]}</div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                except Exception as e:
-                    st.error(f"Failed to load comments: {str(e)}")
+                comments = []
 
-                new_comment = st.text_area("Add a comment", key=f"new_comment_{post_id}", height=60)
-                if st.button("Post Comment", key=f"post_comment_{post_id}"):
-                    if new_comment.strip() and supabase:
+                try:
+                    if sb:
                         try:
-                            supabase.table("post_comments").insert(
+                            comments = (
+                                sb.table("post_comments")
+                                .select("*, users(name)")
+                                .eq("post_id", p.get("id"))
+                                .order("created_at")
+                                .execute()
+                                .data or []
+                            )
+                        except Exception:
+                            comments = (
+                                sb.table("post_comments")
+                                .select("*")
+                                .eq("post_id", p.get("id"))
+                                .order("created_at")
+                                .execute()
+                                .data or []
+                            )
+                except Exception:
+                    comments = []
+
+                for c in comments:
+                    commenter_name = (c.get("users") or {}).get("name") or c.get("author_email", "Unknown")
+
+                    st.markdown(
+                        f"""
+                        <div class="comment-item">
+                            <div><b>{html.escape(str(commenter_name))}</b></div>
+                            <div>{html.escape(str(c.get('content', '')))}</div>
+                            <div style="font-size:12px;color:#666;">{str(c.get('created_at', ''))[:16]}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                new_comment = st.text_area(
+                    "Add a comment",
+                    key=f"new_comment_{post_id}",
+                    height=60,
+                )
+
+                if st.button("Post Comment", key=f"post_comment_{post_id}"):
+                    if new_comment.strip() and sb:
+                        try:
+                            sb.table("post_comments").insert(
                                 {
                                     "post_id": p.get("id"),
                                     "author_email": u.get("email"),
@@ -2362,7 +3004,13 @@ def show_feed():
                             ).execute()
 
                             if p.get("author_email") != u.get("email"):
-                                send_notification(p.get("author_email"), u.get("email"), "reply", p.get("id"), f"{u.get('name')} commented on your post")
+                                send_notification(
+                                    p.get("author_email"),
+                                    u.get("email"),
+                                    "reply",
+                                    p.get("id"),
+                                    f"{u.get('name')} commented on your post",
+                                )
 
                             show_toast("Comment posted!")
                             st.rerun()
@@ -2372,8 +3020,8 @@ def show_feed():
             if u.get("admin_level") != "staff" or p.get("author_email") == u.get("email"):
                 if st.button("🗑️ Delete Post", key=f"del_post_{post_id}", type="secondary"):
                     try:
-                        if supabase:
-                            supabase.table("social_posts").delete().eq("id", p.get("id")).execute()
+                        if sb:
+                            sb.table("social_posts").delete().eq("id", p.get("id")).execute()
                             audit_log(u.get("email"), "post.delete", "post", p.get("id"))
                             show_toast("Post deleted")
                             st.rerun()
@@ -2385,6 +3033,7 @@ def show_feed():
 
 def show_workspace():
     st.markdown("### 🧰 Workspace")
+
     c = st.columns(4)
 
     with c[0]:
@@ -2409,6 +3058,8 @@ def show_workspace():
 
 
 def show_tapal():
+    render_back_button()
+
     u = st.session_state.user or {}
     st.markdown("### 📥 Smart Tapal")
 
@@ -2428,6 +3079,7 @@ def show_tapal():
             pri = st.selectbox("Priority", ["Normal", "Urgent", "Immediate"])
 
         rno = f"R.No/{u.get('section', 'A')}/{u.get('designation', 'JA')}/{now_utc().year}/{seq}" if seq else ""
+
         if rno:
             st.info(f"📋 Reference: {rno}")
 
@@ -2440,13 +3092,19 @@ def show_tapal():
                 return
 
             did = None
+
             if file:
                 if file.size > 20 * 1024 * 1024:
                     show_toast("File too large. Max 20MB.", "error")
                     return
 
                 with st.spinner("Uploading..."):
-                    res = storage_system.upload_document(file.read(), file.name, "tapal", u.get("email"))
+                    res = storage_system.upload_document(
+                        file.read(),
+                        file.name,
+                        "tapal",
+                        u.get("email"),
+                    )
 
                 if res.get("success"):
                     did = res.get("document_id")
@@ -2454,9 +3112,11 @@ def show_tapal():
                     show_toast(res.get("error", "Upload failed"), "error")
                     return
 
-            if supabase:
+            sb = globals().get("supabase")
+
+            if sb:
                 try:
-                    supabase.table("tapal_log").insert(
+                    sb.table("tapal_log").insert(
                         {
                             "r_no": rno,
                             "direction": direction,
@@ -2472,6 +3132,7 @@ def show_tapal():
                             "created_at": now_utc().isoformat(),
                         }
                     ).execute()
+
                     show_toast("Saved successfully!")
                     st.rerun()
                 except Exception:
@@ -2481,6 +3142,8 @@ def show_tapal():
 
 
 def show_dispatch():
+    render_back_button()
+
     u = st.session_state.user or {}
     st.markdown("### 📮 Dispatch")
 
@@ -2503,6 +3166,7 @@ def show_dispatch():
             safe_subj = html.escape(subj)
 
             dno = f"Dispatch/{u.get('section', 'A')}/{u.get('designation', 'JA')}/{now_utc().year}/{seq}"
+
             st.session_state.dispatch_ready = True
             st.session_state.dispatch_html = f"""
             <div style="border:2px solid #000;padding:20px;background:white;color:black;">
@@ -2513,6 +3177,7 @@ def show_dispatch():
                 <b>Subject:</b> {safe_subj}
             </div>
             """
+
             show_toast("Generated!")
 
     if st.session_state.get("dispatch_ready"):
@@ -2521,35 +3186,89 @@ def show_dispatch():
 
 def document_card(doc: Dict):
     doc_id = str(doc.get("id", ""))
+
     if not doc_id:
         return
 
     with st.expander(f"📄 {doc.get('filename', 'Document')}"):
         st.write(f"Summary: {doc.get('ai_summary') or '(Processing)'}")
 
+        try:
+            size_bytes = int(doc.get("compressed_size_bytes", 0) or 0)
+            st.caption(f"Tier: {doc.get('storage_tier', 'hot')} | Size: {size_bytes / 1024:.1f} KB")
+        except Exception:
+            pass
+
         if st.button("Download", key=f"dl_{doc_id}"):
-            presigned = storage_system.get_presigned_url(doc.get("file_key", ""), doc.get("storage_tier", "hot"))
+            presigned = storage_system.get_presigned_url(
+                doc.get("storage_path", ""),
+                doc.get("storage_tier", "hot"),
+            )
+
             if presigned:
                 st.markdown(f"[Download]({presigned})")
             else:
                 data = storage_system.download_document(doc_id)
+
                 if data:
-                    st.download_button("Save", data, file_name=doc.get("filename", "file"), key=f"sv_{doc_id}")
+                    st.download_button(
+                        "Save",
+                        data,
+                        file_name=doc.get("filename", "file"),
+                        key=f"sv_{doc_id}",
+                    )
                 else:
                     st.error("Unable to download file.")
 
 
 def show_documents():
+    render_back_button()
+
     u = st.session_state.user or {}
     st.markdown("### 📄 Documents")
 
+    components.html(
+        """
+        <div style="border:2px dashed #ccc; padding:15px; border-radius:8px; text-align:center; background:white;">
+            <h4>🔐 Smart Upload Hash Check</h4>
+            <input type="file" id="smart-file-input" accept=".pdf,.jpg,.png" style="margin:10px 0;" />
+            <div id="hash-status" style="font-family:monospace; font-size:12px; color:#666;"></div>
+        </div>
+
+        <script>
+        document.getElementById('smart-file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const status = document.getElementById('hash-status');
+            status.textContent = 'Computing SHA-256...';
+
+            const buffer = await file.arrayBuffer();
+            const hashHex = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('');
+
+            status.textContent = `✅ Hash: ${hashHex.substring(0, 16)}... Ready`;
+            status.style.color = '#059669';
+        });
+        </script>
+        """,
+        height=160,
+    )
+
     file = st.file_uploader("Upload", type=["pdf", "jpg", "png", "doc", "docx"])
+
     if file:
         if file.size > 20 * 1024 * 1024:
             show_toast("Too large. Max 20MB.", "error")
         else:
             with st.spinner("Uploading..."):
-                res = storage_system.upload_document(file.read(), file.name, "circular", u.get("email"))
+                res = storage_system.upload_document(
+                    file.read(),
+                    file.name,
+                    "circular",
+                    u.get("email"),
+                )
 
             if res.get("success"):
                 if res.get("duplicate"):
@@ -2565,11 +3284,13 @@ def show_documents():
     if q:
         docs = search_documents(q)
     else:
-        if supabase:
+        sb = globals().get("supabase")
+
+        if sb:
             try:
                 docs = (
-                    supabase.table("documents")
-                    .select("id, filename, file_key, storage_tier, doc_type, ai_summary, uploaded_at")
+                    sb.table("files")
+                    .select("id, filename, storage_path, storage_tier, ai_summary, uploaded_at, compressed_size_bytes")
                     .order("uploaded_at", desc=True)
                     .limit(20)
                     .execute()
@@ -2578,61 +3299,130 @@ def show_documents():
             except Exception:
                 docs = read_local_documents()[:20]
         else:
-            docs = sorted(read_local_documents(), key=lambda x: str(x.get("uploaded_at", "")), reverse=True)[:20]
+            docs = sorted(
+                read_local_documents(),
+                key=lambda x: str(x.get("uploaded_at", "")),
+                reverse=True,
+            )[:20]
 
     if not docs:
-        st.markdown('<div class="empty-state"><div style="font-size:60px;">📭</div><h3>No documents</h3></div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="empty-state"><div style="font-size:60px;">📭</div><h3>No documents</h3></div>',
+            unsafe_allow_html=True,
+        )
 
     for d in docs:
         document_card(d)
 
 
-def show_ai():
-    st.markdown("### 🤖 AI Assistant")
+def show_messages():
+    render_back_button()
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    u = st.session_state.user or {}
+    st.markdown("### 💬 Messages")
+    st.caption("Auto-delete after 24h. ⭐ Star to compress and keep forever.")
 
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
+    sb = globals().get("supabase")
 
-    prompt = st.chat_input("Ask...")
-    if prompt:
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    if not sb:
+        st.warning("Supabase is required for messages.")
+        return
 
-        with st.chat_message("assistant"):
-            src = search_documents(prompt, 4)
-            web = ""
+    with st.form("send_msg"):
+        msg = st.text_input("Type a message...")
 
-            if not src:
-                web = agentic_web_search(prompt, "gov")
-                if not web.strip():
-                    web = agentic_web_search(prompt, "deep")
+        if st.form_submit_button("Send"):
+            if msg:
+                try:
+                    sb.table("messages").insert(
+                        {
+                            "user_id": u.get("email"),
+                            "content": sanitize_input(msg),
+                            "created_at": now_utc().isoformat(),
+                        }
+                    ).execute()
 
-            ctx = "Answer using only context.\n\n"
-            if src:
-                ctx += "".join([f"- {s.get('filename')}: {s.get('ai_summary')}\n" for s in src])
+                    st.rerun()
+                except Exception as e:
+                    show_toast(f"Failed to send message: {str(e)}", "error")
+
+    msgs = []
+
+    try:
+        msgs = (
+            sb.table("messages")
+            .select("*")
+            .eq("user_id", u.get("email"))
+            .order("created_at", desc=True)
+            .limit(50)
+            .execute()
+            .data or []
+        )
+    except Exception:
+        msgs = []
+
+    if not msgs:
+        st.info("No messages yet.")
+
+    for m in msgs:
+        mid = str(m.get("id", uuid.uuid4()))
+
+        c1, c2, c3 = st.columns([0.5, 8, 1.5])
+
+        with c1:
+            star = "⭐" if m.get("is_starred") else "☆"
+
+            if st.button(star, key=f"star_{mid}"):
+                try:
+                    if m.get("is_starred"):
+                        content = unpack_message(m.get("compressed_payload")) if m.get("compressed_payload") else m.get("content", "")
+
+                        sb.table("messages").update(
+                            {
+                                "is_starred": False,
+                                "is_compressed": False,
+                                "compressed_payload": None,
+                                "content": content,
+                            }
+                        ).eq("id", m.get("id")).execute()
+                    else:
+                        payload = pack_message(m.get("content", ""))
+
+                        sb.table("messages").update(
+                            {
+                                "is_starred": True,
+                                "is_compressed": True,
+                                "compressed_payload": payload,
+                                "content": None,
+                            }
+                        ).eq("id", m.get("id")).execute()
+
+                    st.rerun()
+                except Exception as e:
+                    show_toast(f"Failed to update message: {str(e)}", "error")
+
+        with c2:
+            if m.get("is_compressed") and m.get("compressed_payload"):
+                st.write(unpack_message(m.get("compressed_payload")))
             else:
-                ctx += f"WEB:\n{web}"
+                st.write(m.get("content", ""))
 
-            r = ai_system.request(ctx + f"\nQuestion: {prompt}")
-            resp = r.get("response") if r.get("success") else "AI unavailable. Add GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY."
-
-            st.markdown(resp)
-            st.session_state.messages.append({"role": "assistant", "content": resp})
-
-
+        with c3:
+            st.caption(str(m.get("created_at", ""))[:16]) 
+    # ============================================================
+# SYSTEM HEALTH
+# ============================================================
 def show_system_health():
     st.markdown("### 🩺 System Health Check")
-    cols = st.columns(3)
+
+    cols = st.columns(4)
 
     with cols[0]:
-        if supabase:
+        sb = globals().get("supabase")
+
+        if sb:
             try:
-                supabase.table("users").select("id").limit(1).execute()
+                sb.table("users").select("id").limit(1).execute()
                 st.success("✅ Supabase: Connected")
             except Exception:
                 st.error("❌ Supabase: Down")
@@ -2640,6 +3430,20 @@ def show_system_health():
             st.warning("⚠️ Supabase: Not configured")
 
     with cols[1]:
+        if redis_client:
+            try:
+                if hasattr(redis_client, "ping"):
+                    redis_client.ping()
+                else:
+                    redis_client.get("health_check")
+
+                st.success("✅ Redis: Connected")
+            except Exception:
+                st.error("❌ Redis: Down")
+        else:
+            st.warning("⚠️ Redis: Not configured")
+
+    with cols[2]:
         storage_status = []
 
         if r2_client:
@@ -2665,7 +3469,7 @@ def show_system_health():
 
         st.info("Storage: " + (" | ".join(storage_status) or "❌ None"))
 
-    with cols[2]:
+    with cols[3]:
         try:
             if qdrant_client:
                 qdrant_client.get_collections()
@@ -2676,31 +3480,64 @@ def show_system_health():
             st.error("❌ Qdrant: Down")
 
 
-def get_office_directory(office_code: str):
-    worker_url = secret("CF_WORKER_URL", "")
-    if worker_url:
-        try:
-            resp = requests.get(f"{worker_url}/directory", params={"office": office_code}, timeout=2)
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
+# ============================================================
+# AI ASSISTANT PAGE
+# ============================================================
+def show_ai():
+    render_back_button()
 
-    try:
-        if supabase:
-            return (
-                supabase.table("users")
-                .select("name, designation, section, seat_number")
-                .eq("office_code", office_code)
-                .execute()
-                .data or []
-            )
-    except Exception:
-        pass
+    st.markdown("### 🤖 AI Assistant")
 
-    return []
+    training_links = get_training_links()
+
+    if training_links:
+        st.caption(f"🎓 {len(training_links)} trusted training sources active")
+
+    lang = st.selectbox(
+        "Response Language",
+        ["English", "Telugu", "Hindi"],
+        key="ai_language",
+    )
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    if p := st.chat_input("Ask..."):
+        st.session_state.messages.append({"role": "user", "content": p})
+
+        with st.chat_message("user"):
+            st.markdown(p)
+
+        with st.chat_message("assistant"):
+            src = cascading_search(p, lang, 5)
+
+            ctx = "Answer using only provided context and trusted sources.\n\n"
+
+            if src:
+                ctx += "".join(
+                    [
+                        f"- {s.get('filename', 'Source')}: {s.get('ai_summary', '')}\n"
+                        for s in src
+                    ]
+                )
+            else:
+                ctx += "No internal sources found.\n"
+
+            r = ai_system.request(ctx + f"\nQuestion: {p}", lang)
+
+            resp = r.get("response") if r.get("success") else "AI unavailable. Add API keys in Admin Panel -> AI Settings."
+
+            st.markdown(resp)
+            st.session_state.messages.append({"role": "assistant", "content": resp})
 
 
+# ============================================================
+# ADMIN PANEL
+# ============================================================
 def show_admin():
     u = st.session_state.user or {}
 
@@ -2708,28 +3545,62 @@ def show_admin():
         st.warning("Access denied")
         return
 
+    render_back_button()
+
     st.markdown("### 🏛️ Admin Panel")
 
     section = st.radio(
         "Section",
-        ["🩺 Health", "👥 Users", "📊 Storage", "🔄 Maintenance", "📋 Audit", "🚨 Emergency", "📢 Announcements", "📊 Analytics"],
+        [
+            "🩺 Health",
+            "👥 Users",
+            "⚙️ AI Settings",
+            "🧠 AI Training",
+            "📊 Storage & AI",
+            "🔄 Maintenance",
+            "📋 Audit",
+            "🚨 Emergency",
+            "📢 Announcements",
+        ],
         horizontal=True,
         label_visibility="collapsed",
         key="admin_section",
     )
 
+    RTA_DESIGNATIONS = [
+        "Junior Assistant (Jr Asst)",
+        "Senior Assistant (Sr Asst)",
+        "Assistant Officer (AO)",
+        "Regional Transport Officer (RTO)",
+        "Deputy Transport Commissioner (DTC)",
+        "Motor Vehicle Inspector (MVI)",
+        "Assistant Motor Vehicle Inspector (AMVI)",
+    ]
+
+    SYSTEM_ACCESS_ROLES = [
+        "staff",
+        "office_admin",
+        "system_admin",
+    ]
+
+    # --------------------------------------------------------
+    # HEALTH
+    # --------------------------------------------------------
     if section == "🩺 Health":
         st.markdown("#### 🩺 Health")
+
         if st.button("Check Health", key="hcheck"):
             show_system_health()
 
         st.divider()
         st.markdown("#### 📜 Recent Errors")
 
-        if supabase:
+        sb = globals().get("supabase")
+
+        if sb:
             try:
                 errs = (
-                    supabase.table("audit_logs")
+                    sb.table("audit_logs")
                     .select("*")
                     .eq("action", "error")
                     .gte("created_at", (now_utc() - timedelta(hours=24)).isoformat())
@@ -2738,8 +3609,10 @@ def show_admin():
                     .execute()
                     .data or []
                 )
+
                 if not errs:
                     st.success("No errors in 24h!")
+
                 for e in errs:
                     st.error(f"{e.get('resource_type', 'Unknown')} at {str(e.get('created_at', ''))[:16]}")
                     st.caption(str(e.get("metadata", ""))[:200])
@@ -2748,62 +3621,102 @@ def show_admin():
         else:
             st.info("Supabase is not configured.")
 
+    # --------------------------------------------------------
+    # USERS
+    # --------------------------------------------------------
     elif section == "👥 Users":
         st.markdown("#### 👥 Users")
+
+        st.info(
+            "Passwords are stored as secure hashes. Admin cannot view existing passwords, "
+            "but can reset them anytime."
+        )
 
         with st.expander("➕ Add User"):
             with st.form("adduser"):
                 ne = st.text_input("Email")
                 nn = st.text_input("Name")
-                na = st.selectbox("Role", ["staff", "office_admin", "system_admin"])
+                nd = st.selectbox("RTA Designation", RTA_DESIGNATIONS)
+                na = st.selectbox("System Access Role", SYSTEM_ACCESS_ROLES)
+                npw = st.text_input("Password (leave blank to auto-generate)", type="password")
 
                 if st.form_submit_button("Create"):
-                    if ne and nn:
-                        tp = secrets.token_urlsafe(8)
-                        if supabase:
-                            try:
-                                supabase.table("users").insert(
-                                    {
-                                        "email": ne.strip().lower(),
-                                        "name": nn,
-                                        "password_hash": hash_password(tp),
-                                        "admin_level": na,
-                                        "active": True,
-                                    }
-                                ).execute()
-                                show_toast(f"Created user. Temporary password: {tp}")
-                            except Exception:
-                                show_toast("Failed to create user", "error")
-                        else:
-                            show_toast("Supabase not configured. Only local admin is available.", "warning")
-                    else:
+                    if not ne or not nn:
                         show_toast("Email and name required", "warning")
+                    elif not validate_email(ne):
+                        show_toast("Invalid email format", "error")
+                    else:
+                        pw = npw.strip() or secrets.token_urlsafe(10)
+
+                        if len(pw) < 8:
+                            show_toast("Password must be at least 8 characters", "error")
+                        else:
+                            sb = globals().get("supabase")
+
+                            if sb:
+                                try:
+                                    sb.table("users").insert(
+                                        {
+                                            "email": ne.strip().lower(),
+                                            "name": nn,
+                                            "designation": nd,
+                                            "password_hash": hash_password(pw),
+                                            "admin_level": na,
+                                            "active": True,
+                                        }
+                                    ).execute()
+
+                                    show_toast(f"Created user. Password: {pw}")
+                                except Exception:
+                                    show_toast("Failed to create user", "error")
+                            else:
+                                show_toast("Supabase not configured. Only local admin is available.", "warning")
 
         with st.expander("📥 Bulk Import CSV"):
-            csvf = st.file_uploader("CSV", type=["csv"])
+            csvf = st.file_uploader("CSV columns: email,name,designation,admin_level,password", type=["csv"])
+
             if csvf and st.button("Import", key="bimp"):
-                if not supabase:
+                sb = globals().get("supabase")
+
+                if not sb:
                     show_toast("Supabase not configured", "warning")
                 else:
                     try:
                         df = pd.read_csv(csvf)
                         created = []
 
-                        for _, row in df.iterrows():
-                            tp = secrets.token_urlsafe(8)
+                        def csv_str(row, key):
+                            v = row.get(key, "")
                             try:
-                                supabase.table("users").insert(
-                                    {
-                                        "email": str(row.get("email", "")).strip().lower(),
-                                        "password_hash": hash_password(tp),
-                                        "name": str(row.get("name", "")),
-                                        "admin_level": str(row.get("admin_level", "staff")),
-                                        "active": True,
-                                    }
-                                ).execute()
-                                created.append((row.get("email"), tp))
+                                if pd.isna(v):
+                                    return ""
                             except Exception:
                                 pass
+                            return str(v).strip()
+
+                        for _, row in df.iterrows():
+                            email = csv_str(row, "email").lower()
+                            name = csv_str(row, "name")
+                            designation = csv_str(row, "designation") or "Staff"
+                            admin_level = csv_str(row, "admin_level") or "staff"
+                            password = csv_str(row, "password") or secrets.token_urlsafe(10)
+
+                            if email and name and validate_email(email) and len(password) >= 8:
+                                try:
+                                    sb.table("users").insert(
+                                        {
+                                            "email": email,
+                                            "name": name,
+                                            "designation": designation,
+                                            "password_hash": hash_password(password),
+                                            "admin_level": admin_level,
+                                            "active": True,
+                                        }
+                                    ).execute()
+
+                                    created.append((email, password))
+                                except Exception:
+                                    pass
 
                         if created:
                             st.download_button(
@@ -2817,12 +3730,17 @@ def show_admin():
                     except Exception as e:
                         show_toast(f"Import failed: {e}", "error")
 
+        st.divider()
+
         users = []
-        if supabase:
+        sb = globals().get("supabase")
+
+        if sb:
             try:
                 users = (
-                    supabase.table("users")
-                    .select("id, email, name, office_code, office_name, designation, section, seat_number, admin_level, active, password_hash")
+                    sb.table("users")
+                    .select("*")
+                    .order("name")
                     .execute()
                     .data or []
                 )
@@ -2836,59 +3754,260 @@ def show_admin():
             st.info("No users found.")
 
         for usr in users:
-            c1, c2, c3 = st.columns([3, 1, 1])
             usr_id = str(usr.get("id") or usr.get("email") or uuid.uuid4())
-            c1.write(f"{'🟢' if usr.get('active', True) else '🔴'} **{usr.get('name', 'Unknown')}** ({usr.get('email', '')})")
 
-            if c2.button("🔑", key=f"rst_{usr_id}"):
-                tp = secrets.token_urlsafe(8)
+            c1, c2 = st.columns([3, 2])
 
-                if supabase:
-                    try:
-                        supabase.table("users").update({"password_hash": hash_password(tp)}).eq("id", usr.get("id")).execute()
-                        show_toast(f"New password: {tp}")
-                    except Exception:
-                        show_toast("Password reset failed", "error")
-                else:
-                    if save_local_admin(usr.get("email", ""), usr.get("name", "System Admin"), tp, usr.get("admin_level", "system_admin")):
-                        show_toast(f"New local admin password: {tp}")
+            c1.write(
+                f"{'🟢' if usr.get('active', True) else '🔴'} "
+                f"**{usr.get('name', 'Unknown')}** ({usr.get('email', '')})"
+            )
+
+            c2.write(
+                f"**{usr.get('designation', 'N/A')}** | Access: `{usr.get('admin_level', 'staff')}`"
+            )
+
+            with st.expander(f"⚙️ Manage {usr.get('name', 'User')}"):
+                new_pass = st.text_input(
+                    "Set New Password",
+                    type="password",
+                    key=f"np_{usr_id}",
+                )
+
+                if st.button("Update Password", key=f"up_{usr_id}"):
+                    if len(new_pass) < 8:
+                        show_toast("Password must be at least 8 characters", "error")
                     else:
-                        show_toast("Password reset failed", "error")
+                        if sb and usr.get("id"):
+                            try:
+                                sb.table("users").update(
+                                    {"password_hash": hash_password(new_pass)}
+                                ).eq("id", usr.get("id")).execute()
 
-            if c3.button("Toggle", key=f"tg_{usr_id}"):
-                if supabase:
-                    try:
-                        supabase.table("users").update({"active": not usr.get("active", True)}).eq("id", usr.get("id")).execute()
-                        st.rerun()
-                    except Exception:
-                        show_toast("Toggle failed", "error")
+                                show_toast("Password updated")
+                            except Exception:
+                                show_toast("Password reset failed", "error")
+                        else:
+                            if save_local_admin(
+                                usr.get("email", ""),
+                                usr.get("name", "System Admin"),
+                                new_pass,
+                                usr.get("admin_level", "system_admin"),
+                            ):
+                                show_toast("Local admin password updated")
+                            else:
+                                show_toast("Password reset failed", "error")
+
+                if st.button("Toggle Active Status", key=f"tg_{usr_id}"):
+                    if sb and usr.get("id"):
+                        try:
+                            sb.table("users").update(
+                                {"active": not usr.get("active", True)}
+                            ).eq("id", usr.get("id")).execute()
+
+                            if redis_client:
+                                try:
+                                    redis_client.delete(f"user_v2:{usr.get('email')}")
+                                except Exception:
+                                    pass
+
+                            st.rerun()
+                        except Exception:
+                            show_toast("Toggle failed", "error")
+                    else:
+                        show_toast("Local admin toggle is not supported.", "warning")
+
+    # --------------------------------------------------------
+    # AI SETTINGS
+    # --------------------------------------------------------
+    elif section == "⚙️ AI Settings":
+        st.markdown("#### ⚙️ AI API Settings")
+
+        st.info(
+            "Admin-controlled AI keys. These override secrets.toml and are saved in Supabase app_settings."
+        )
+
+        with st.form("ai_settings_form"):
+            gemini_key = st.text_input(
+                "Gemini API Key",
+                value=get_setting("GEMINI_API_KEY"),
+                type="password",
+            )
+
+            gemini_embed_key = st.text_input(
+                "Gemini Embedding Key",
+                value=get_setting("GEMINI_EMBEDDING_KEY"),
+                type="password",
+            )
+
+            openai_key = st.text_input(
+                "OpenAI API Key",
+                value=get_setting("OPENAI_API_KEY"),
+                type="password",
+            )
+
+            anthropic_key = st.text_input(
+                "Anthropic API Key",
+                value=get_setting("ANTHROPIC_API_KEY"),
+                type="password",
+            )
+
+            serper_key = st.text_input(
+                "Serper Web Search Key",
+                value=get_setting("SERPER_API_KEY"),
+                type="password",
+            )
+
+            if st.form_submit_button("💾 Save AI Settings"):
+                set_setting("GEMINI_API_KEY", gemini_key)
+                set_setting("GEMINI_EMBEDDING_KEY", gemini_embed_key)
+                set_setting("OPENAI_API_KEY", openai_key)
+                set_setting("ANTHROPIC_API_KEY", anthropic_key)
+                set_setting("SERPER_API_KEY", serper_key)
+
+                show_toast("AI settings saved")
+                st.rerun()
+
+    # --------------------------------------------------------
+    # AI TRAINING LINKS
+    # --------------------------------------------------------
+    elif section == "🧠 AI Training":
+        st.markdown("#### 🧠 AI Training Sources")
+
+        links = get_training_links()
+
+        st.info(f"Trusted Sources: {len(links)}/30")
+
+        if len(links) < 30:
+            with st.form("add_link_form"):
+                url = st.text_input("Website URL", placeholder="https://aptransport.org")
+                title = st.text_input("Title (Optional)")
+
+                if st.form_submit_button("➕ Add Trusted Source"):
+                    if url:
+                        if add_training_link(url, title, u.get("email")):
+                            show_toast("Trusted source added")
+                            st.rerun()
+                        else:
+                            show_toast("Failed to add source", "error")
+                    else:
+                        show_toast("URL is required", "warning")
+        else:
+            st.warning("Maximum limit of 30 links reached. Delete an existing link to add a new one.")
+
+        st.divider()
+
+        if not links:
+            st.info("No training links added yet.")
+
+        for link in links:
+            c1, c2 = st.columns([4, 1])
+
+            c1.markdown(
+                f"**{link.get('title', 'Untitled')}**  \n"
+                f"🔗 {link.get('url', '')}  \n"
+                f"*Domain: `{link.get('domain', '')}`*"
+            )
+
+            if c2.button("🗑️ Delete", key=f"del_link_{link.get('id')}"):
+                if delete_training_link(link.get("id")):
+                    show_toast("Source removed")
+                    st.rerun()
                 else:
-                    show_toast("Local admin toggle is not supported. Use Supabase for multi-user control.", "warning")
+                    show_toast("Delete failed", "error")
 
-    elif section == "📊 Storage":
-        st.markdown("#### 📊 Storage")
-        if st.button("Auto-Tier", key="atier"):
-            r = auto_tier_documents()
-            if "error" in r:
-                show_toast(r["error"], "error")
-            else:
-                show_toast(f"Moved {r.get('moved_to_cold', 0)} cold, {r.get('moved_to_hot', 0)} hot")
+    # --------------------------------------------------------
+    # STORAGE & AI METRICS
+    # --------------------------------------------------------
+    elif section == "📊 Storage & AI":
+        st.markdown("#### 📊 Storage & AI Metrics")
 
+        sb = globals().get("supabase")
+
+        if sb:
+            try:
+                metrics = sb.table("system_metrics").select("*").execute().data or []
+
+                def metric_val(name):
+                    return int(
+                        next(
+                            (m.get("metric_value", 0) for m in metrics if m.get("metric_name") == name),
+                            0,
+                        )
+                        or 0
+                    )
+
+                ai_req = metric_val("ai_requests_total")
+                ai_tok = metric_val("ai_tokens_estimated")
+
+                files = sb.table("files").select("compressed_size_bytes, storage_tier").execute().data or []
+
+                used = sum(int(f.get("compressed_size_bytes", 0) or 0) for f in files)
+
+                try:
+                    quota = int(secret("STORAGE_QUOTA_BYTES", "5000000000"))
+                except Exception:
+                    quota = 5_000_000_000
+
+                c1, c2, c3 = st.columns(3)
+
+                c1.metric(
+                    "💾 Storage Used",
+                    f"{used / (1024 ** 3):.2f} GB",
+                    f"Quota: {quota / (1024 ** 3):.1f} GB",
+                )
+
+                c1.progress(min(float(used / quota), 1.0) if quota > 0 else 0.0)
+
+                c2.metric("🤖 AI Requests", f"{ai_req:,}")
+                c3.metric("🔑 Estimated AI Tokens", f"{ai_tok:,}")
+
+                hot_count = len([f for f in files if f.get("storage_tier") == "hot"])
+                cold_count = len([f for f in files if f.get("storage_tier") == "cold"])
+
+                st.caption(f"Files: {len(files)} | Hot: {hot_count} | Cold: {cold_count}")
+
+            except Exception as e:
+                st.error(f"Metrics failed: {e}")
+        else:
+            st.info("Supabase is not configured.")
+
+    # --------------------------------------------------------
+    # MAINTENANCE
+    # --------------------------------------------------------
     elif section == "🔄 Maintenance":
         st.markdown("#### 🔄 Maintenance")
 
-        if st.button("Reprocess Failed", key="reproc"):
-            if not supabase:
+        sb = globals().get("supabase")
+
+        if st.button("Reprocess Failed Documents", key="reproc"):
+            if not sb:
                 show_toast("Supabase not configured", "warning")
             else:
                 try:
-                    failed = supabase.table("documents").select("id").eq("processing_status", "failed").limit(10).execute().data or []
+                    failed = (
+                        sb.table("files")
+                        .select("id")
+                        .eq("processing_status", "failed")
+                        .limit(10)
+                        .execute()
+                        .data or []
+                    )
+
                     for d in failed:
                         text = storage_system.get_full_text(d.get("id"))
+
                         if text:
                             s = ai_system.summarize(text[:3000])
+
                             if s:
-                                supabase.table("documents").update({"ai_summary": s, "processing_status": "ready"}).eq("id", d.get("id")).execute()
+                                sb.table("files").update(
+                                    {
+                                        "ai_summary": s,
+                                        "processing_status": "ready",
+                                    }
+                                ).eq("id", d.get("id")).execute()
+
                     show_toast(f"Reprocessed {len(failed)}")
                 except Exception:
                     show_toast("Reprocess failed", "error")
@@ -2896,58 +4015,94 @@ def show_admin():
         st.divider()
         st.markdown("##### ⏰ Scheduled Tasks")
 
-        for tid, tname, freq in [
+        tasks = [
             ("cleanup_login", "Clean login attempts", "Daily"),
-            ("auto_tier", "Auto-tier", "Weekly"),
-            ("reset_stuck", "Reset stuck", "Hourly"),
-            ("clean_sessions", "Clean sessions", "Daily"),
-        ]:
+            ("auto_tier", "Auto-tier storage", "Weekly"),
+            ("reset_stuck", "Reset stuck processing", "Hourly"),
+            ("clean_sessions", "Clean expired sessions", "Daily"),
+        ]
+
+        for tid, tname, freq in tasks:
             c1, c2 = st.columns([3, 1])
             c1.write(f"**{tname}** ({freq})")
 
             if c2.button("Run", key=f"t_{tid}"):
-                if not supabase:
+                if not sb:
                     show_toast("Supabase not configured", "warning")
                     continue
 
                 with st.spinner("Running..."):
                     try:
                         if tid == "cleanup_login":
-                            supabase.table("login_attempts").delete().lt("created_at", (now_utc() - timedelta(days=7)).isoformat()).execute()
+                            sb.table("login_attempts").delete().lt(
+                                "created_at",
+                                (now_utc() - timedelta(days=7)).isoformat(),
+                            ).execute()
+
                         elif tid == "auto_tier":
                             auto_tier_documents()
+
                         elif tid == "reset_stuck":
                             stuck = (
-                                supabase.table("documents")
+                                sb.table("files")
                                 .select("id")
                                 .eq("processing_status", "pending")
                                 .lt("uploaded_at", (now_utc() - timedelta(hours=1)).isoformat())
                                 .execute()
                             )
+
                             if stuck.data:
-                                supabase.table("documents").update({"processing_status": "failed"}).in_(
-                                    "id", [d.get("id") for d in stuck.data]
+                                sb.table("files").update(
+                                    {"processing_status": "failed"}
+                                ).in_(
+                                    "id",
+                                    [d.get("id") for d in stuck.data],
                                 ).execute()
+
                         elif tid == "clean_sessions":
-                            supabase.table("sessions").delete().lt("expires_at", now_utc().isoformat()).execute()
+                            sb.table("sessions").delete().lt(
+                                "expires_at",
+                                now_utc().isoformat(),
+                            ).execute()
 
                         show_toast("Done!")
                         st.rerun()
                     except Exception:
                         show_toast("Task failed", "error")
 
+    # --------------------------------------------------------
+    # AUDIT
+    # --------------------------------------------------------
     elif section == "📋 Audit":
         st.markdown("#### 📋 Audit")
-        if supabase:
+
+        sb = globals().get("supabase")
+
+        if sb:
             try:
-                logs = supabase.table("audit_logs").select("*").order("created_at", desc=True).limit(50).execute().data or []
+                logs = (
+                    sb.table("audit_logs")
+                    .select("*")
+                    .order("created_at", desc=True)
+                    .limit(50)
+                    .execute()
+                    .data or []
+                )
+
                 for log in logs:
-                    st.caption(f"{str(log.get('created_at', ''))[:16]} | {log.get('user_email', '')} | {log.get('action', '')}")
+                    st.caption(
+                        f"{str(log.get('created_at', ''))[:16]} | "
+                        f"{log.get('user_email', '')} | "
+                        f"{log.get('action', '')}"
+                    )
             except Exception:
                 st.warning("Could not read audit logs.")
         else:
             st.info("Supabase is not configured.")
 
+    # --------------------------------------------------------
+    # EMERGENCY
+    # --------------------------------------------------------
     elif section == "🚨 Emergency":
         st.markdown("#### 🚨 Emergency")
 
@@ -2960,6 +4115,7 @@ def show_admin():
                 st.rerun()
         else:
             st.warning("⚠️ In maintenance")
+
             if st.button("✅ Disable Maintenance", key="moff"):
                 set_maintenance_mode(False)
                 show_toast("Maintenance OFF")
@@ -2968,32 +4124,44 @@ def show_admin():
         st.divider()
 
         if st.button("🔒 Force Logout All", type="secondary", key="flog"):
-            if supabase:
+            sb = globals().get("supabase")
+
+            if sb:
                 try:
-                    supabase.table("sessions").delete().neq("token_hash", "").execute()
+                    sb.table("sessions").delete().neq("token_hash", "").execute()
                     show_toast("All sessions deleted", "warning")
+                    st.rerun()
                 except Exception:
                     show_toast("Could not delete sessions", "error")
             else:
-                st.session_state.clear()
-                cookies.delete(COOKIE_NAME)
-                show_toast("Current session cleared", "warning")
+                logout()
 
         if st.button("🗑️ Clear AI Cache", type="secondary", key="ccache"):
             if redis_client:
                 try:
-                    for k in redis_client.scan_iter("ai_cache:*"):
+                    if hasattr(redis_client, "scan_iter"):
+                        keys = redis_client.scan_iter("ai_cache:*")
+                    else:
+                        keys = redis_client.keys("ai_cache:*")
+
+                    for k in keys:
                         redis_client.delete(k)
+
                     show_toast("Cache cleared")
                 except Exception:
                     show_toast("Could not clear cache", "error")
             else:
                 show_toast("Redis not configured", "warning")
 
+    # --------------------------------------------------------
+    # ANNOUNCEMENTS
+    # --------------------------------------------------------
     elif section == "📢 Announcements":
         st.markdown("#### 📢 Announcements")
 
-        if not supabase:
+        sb = globals().get("supabase")
+
+        if not sb:
             st.info("Supabase is not configured.")
         else:
             with st.form("ann"):
@@ -3005,7 +4173,7 @@ def show_admin():
                 if st.form_submit_button("Broadcast"):
                     if title and msg:
                         try:
-                            supabase.table("announcements").insert(
+                            sb.table("announcements").insert(
                                 {
                                     "title": title,
                                     "message": msg,
@@ -3014,6 +4182,7 @@ def show_admin():
                                     "created_by": u.get("email"),
                                 }
                             ).execute()
+
                             show_toast("Posted!")
                             st.rerun()
                         except Exception:
@@ -3023,66 +4192,34 @@ def show_admin():
 
             try:
                 anns = (
-                    supabase.table("announcements")
+                    sb.table("announcements")
                     .select("*")
                     .gt("expires_at", now_utc().isoformat())
                     .order("created_at", desc=True)
                     .execute()
                     .data or []
                 )
+
                 for ann in anns:
                     c1, c2 = st.columns([4, 1])
-                    icon = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}.get(ann.get("priority", "info"), "ℹ️")
+
+                    icon = {
+                        "info": "ℹ️",
+                        "warning": "⚠️",
+                        "critical": "🚨",
+                    }.get(ann.get("priority", "info"), "ℹ️")
+
                     c1.write(f"{icon} **{ann.get('title', '')}**")
                     c1.caption(f"{str(ann.get('message', ''))[:100]}...")
 
                     if c2.button("🗑️", key=f"dann_{ann.get('id')}"):
                         try:
-                            supabase.table("announcements").delete().eq("id", ann.get("id")).execute()
+                            sb.table("announcements").delete().eq("id", ann.get("id")).execute()
                             st.rerun()
                         except Exception:
                             show_toast("Delete failed", "error")
             except Exception:
                 pass
-
-    elif section == "📊 Analytics":
-        st.markdown("#### 📊 Analytics")
-
-        if not supabase:
-            st.info("Supabase is not configured.")
-        else:
-            try:
-                logs = (
-                    supabase.table("audit_logs")
-                    .select("user_email, action")
-                    .gte("created_at", (now_utc() - timedelta(days=30)).isoformat())
-                    .execute()
-                    .data or []
-                )
-
-                if logs:
-                    users = supabase.table("users").select("email, office_name").execute().data or []
-                    em = {u.get("email"): u.get("office_name", "Unknown") for u in users}
-
-                    oc = {}
-                    for l in logs:
-                        o = em.get(l.get("user_email"), "Unknown")
-                        oc[o] = oc.get(o, 0) + 1
-
-                    if oc:
-                        st.bar_chart(pd.DataFrame([{"Office": k, "Actions": v} for k, v in oc.items()]).set_index("Office"))
-
-                    ac = {}
-                    for l in logs:
-                        ac[l.get("action")] = ac.get(l.get("action"), 0) + 1
-
-                    st.markdown("##### Top Features")
-                    for a, c in sorted(ac.items(), key=lambda x: -x[1])[:5]:
-                        st.write(f"**{a}**: {c}")
-                else:
-                    st.info("No audit logs found.")
-            except Exception:
-                st.warning("Analytics unavailable.")
 
 
 # ============================================================
@@ -3103,14 +4240,53 @@ def render_sidebar_nav():
             unsafe_allow_html=True,
         )
 
-        menu_items = ["Feed", "Workspace", "Tapal", "Dispatch", "Documents", "AI Assistant"]
-        menu_icons = ["house", "briefcase", "envelope-paper", "send", "file-earmark-text", "robot"]
+        menu_items = [
+            "Feed",
+            "Workspace",
+            "Tapal",
+            "Dispatch",
+            "Documents",
+            "Messages",
+            "AI Assistant",
+        ]
+
+        menu_icons = [
+            "house",
+            "briefcase",
+            "envelope-paper",
+            "send",
+            "file-earmark-text",
+            "chat",
+            "robot",
+        ]
 
         if u.get("admin_level") in ["system_admin", "office_admin"]:
             menu_items.append("Admin Panel")
             menu_icons.append("gear")
 
-        selected = "Feed"
+        page_map = {
+            "Feed": "feed",
+            "Workspace": "workspace",
+            "Tapal": "tapal",
+            "Dispatch": "dispatch",
+            "Documents": "documents",
+            "Messages": "messages",
+            "AI Assistant": "ai",
+            "Admin Panel": "admin",
+        }
+
+        inverse_map = {v: k for k, v in page_map.items()}
+        current_page = st.session_state.get("page", "feed")
+
+        default_index = 0
+
+        if current_page in inverse_map:
+            try:
+                default_index = menu_items.index(inverse_map[current_page])
+            except Exception:
+                default_index = 0
+
+        selected = menu_items[default_index]
 
         if OPTION_MENU_LIB:
             try:
@@ -3119,39 +4295,38 @@ def render_sidebar_nav():
                     menu_items,
                     icons=menu_icons,
                     menu_icon="cast",
-                    default_index=0,
+                    default_index=default_index,
                     styles={
                         "container": {"padding": "0!important", "background-color": "#fafafa"},
                         "icon": {"color": "#0A66C2", "font-size": "18px"},
-                        "nav-link": {"font-size": "15px", "text-align": "left", "margin": "2px 0", "padding": "12px 16px"},
-                        "nav-link-selected": {"background-color": "#0A66C2", "color": "white", "font-weight": "600"},
+                        "nav-link": {
+                            "font-size": "15px",
+                            "text-align": "left",
+                            "margin": "2px 0",
+                            "padding": "12px 16px",
+                        },
+                        "nav-link-selected": {
+                            "background-color": "#0A66C2",
+                            "color": "white",
+                            "font-weight": "600",
+                        },
                     },
                 )
             except Exception:
-                selected = st.radio("Navigation", menu_items)
+                selected = st.radio("Navigation", menu_items, index=default_index)
         else:
-            selected = st.radio("Navigation", menu_items)
+            selected = st.radio("Navigation", menu_items, index=default_index)
 
         st.divider()
 
         if st.button("🚪 Logout", use_container_width=True, type="secondary"):
             logout()
 
-    page_map = {
-        "Feed": "feed",
-        "Workspace": "workspace",
-        "Tapal": "tapal",
-        "Dispatch": "dispatch",
-        "Documents": "documents",
-        "AI Assistant": "ai",
-        "Admin Panel": "admin",
-    }
-
     st.session_state.page = page_map.get(selected, "feed")
 
 
 # ============================================================
-# MAIN
+# MAIN ENTRY POINT
 # ============================================================
 def main():
     if is_maintenance_mode():
@@ -3175,6 +4350,11 @@ def main():
         show_login()
         return
 
+    try:
+        cleanup_old_messages()
+    except Exception:
+        pass
+
     render_sidebar_nav()
 
     page = st.session_state.get("page", "feed")
@@ -3189,6 +4369,8 @@ def main():
         show_dispatch()
     elif page == "documents":
         show_documents()
+    elif page == "messages":
+        show_messages()
     elif page == "ai":
         show_ai()
     elif page == "admin":
