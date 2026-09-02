@@ -2306,6 +2306,8 @@ def try_auto_login():
     if st.session_state.get("logged_in"):
         return
 
+    token = None
+
     try:
         token = cookies.get(COOKIE_NAME)
     except Exception:
@@ -2314,7 +2316,18 @@ def try_auto_login():
     if not token:
         return
 
-    h = hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+    if not isinstance(token, str):
+        return
+
+    if len(token) < 10:
+        return
+
+    token = token.strip()
+
+    if not token:
+        return
+
+    h = hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     sb = globals().get("supabase")
 
@@ -2325,6 +2338,10 @@ def try_auto_login():
         r = sb.table("sessions").select("*").eq("token_hash", h).execute()
 
         if not r.data:
+            try:
+                cookies.delete(COOKIE_NAME)
+            except Exception:
+                pass
             return
 
         s = r.data[0]
@@ -2333,26 +2350,39 @@ def try_auto_login():
         if not expires_raw:
             return
 
-        expires_at = datetime.fromisoformat(str(expires_raw).replace("Z", "+00:00"))
-
-        if expires_at <= now_utc():
+        try:
+            expires_at = datetime.fromisoformat(str(expires_raw).replace("Z", "+00:00"))
+        except Exception:
             return
 
-        u = get_user(s.get("email"))
+        if expires_at <= now_utc():
+            try:
+                sb.table("sessions").delete().eq("token_hash", h).execute()
+                cookies.delete(COOKIE_NAME)
+            except Exception:
+                pass
+            return
+
+        email = s.get("email")
+
+        if not email:
+            return
+
+        u = get_user(email)
 
         if u and u.get("active", True):
             st.session_state.logged_in = True
             st.session_state.user = u
             st.session_state.admin_level = u.get("admin_level", "staff")
-        elif u and not u.get("active", True):
+        else:
             try:
                 sb.table("sessions").delete().eq("token_hash", h).execute()
+                cookies.delete(COOKIE_NAME)
             except Exception:
                 pass
 
-            cookies.delete(COOKIE_NAME)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Auto-login failed: {e}")
 
 
 def do_login(u: Dict):
