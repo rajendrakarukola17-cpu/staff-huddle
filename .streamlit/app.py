@@ -2527,7 +2527,6 @@ def show_documents():
 
 
 def show_ai():
-    """BUG FIX: Conversation memory included."""
     st.markdown("### 🤖 AI Assistant")
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -2536,7 +2535,7 @@ def show_ai():
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
 
-       if p := st.chat_input("Ask..."):
+    if p := st.chat_input("Ask..."):
         st.session_state.messages.append({"role": "user", "content": p})
         with st.chat_message("user"):
             st.markdown(p)
@@ -2545,7 +2544,6 @@ def show_ai():
             src = search_documents(p, 4)
             web = ""
             role = "doc_qa"
-
             if src:
                 ctx = (
                     "Answer using ONLY the document context below. "
