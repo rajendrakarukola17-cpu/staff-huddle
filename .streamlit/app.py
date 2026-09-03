@@ -1314,11 +1314,10 @@ class MultiAI:
                 return r.json()["content"][0]["text"].strip()
             if r.status_code == 429:
                 raise Exception("Rate limited")
-            logger.warning(f"Anthropic API error: {r.status_code} - {r.text[:100]}")
-        except Exception as e:
-            logger.warning(f"Anthropic call failed: {e}")
-            raise
-        return None
+                    raise Exception(f"HTTP {r.status_code}: {r.text[:100]}")
+    except Exception as e:
+        logger.warning(f"Anthropic call failed: {e}")
+        raise
 
     def request(self, prompt, role="chat"):
         """Execute AI request with serial fallback across providers for the given role."""
