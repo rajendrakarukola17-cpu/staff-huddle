@@ -2272,8 +2272,8 @@ def show_dispatch():
         to = st.text_area("To", height=80)
         subj = st.text_input("Subject")
 
-                submitted = st.form_submit_button("🖨️ Generate Label")
-        if submitted:
+     submitted = st.form_submit_button("🖨️ Generate Label")
+     if submitted:
             if not seq or not to.strip() or not subj.strip():
                 show_toast("Seq No., To, and Subject are required", "warning")
             else:
