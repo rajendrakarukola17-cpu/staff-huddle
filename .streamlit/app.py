@@ -641,8 +641,7 @@ class StorageSystem:
         self.hot_bucket = secret("R2_BUCKET_NAME", "rta-hot-storage")
         self.cold_bucket = secret("B2_BUCKET_NAME", "rta-cold-storage")
 
-    def _upload_to_storage(self, data: bytes, key: str, target_tier: str) -> Optional[str]:
-        """Returns actual tier where data landed, or None on failure."""
+        def _upload_to_storage(self, data: bytes, key: str, target_tier: str) -> Optional[str]:
         if target_tier == "cold" and self.b2:
             try:
                 self.b2.put_object(Bucket=self.cold_bucket, Key=key, Body=data)
@@ -657,13 +656,25 @@ class StorageSystem:
             except Exception as e:
                 logger.warning(f"R2 hot upload failed: {e}")
 
-        # Fallback to R2
         if self.r2:
             try:
                 self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data)
                 return "hot"
             except Exception:
                 pass
+
+        # NEW: Supabase Storage fallback
+        sb = globals().get("supabase")
+        if sb:
+            try:
+                try:
+                    sb.storage.from_(self.hot_bucket).upload(key, data, file_options={"upsert": True})
+                except Exception:
+                    sb.storage.create_bucket(self.hot_bucket, {"public": False})
+                    sb.storage.from_(self.hot_bucket).upload(key, data, file_options={"upsert": True})
+                return "supabase"
+            except Exception as e:
+                logger.warning(f"Supabase Storage upload failed: {e}")
 
         return None
 
