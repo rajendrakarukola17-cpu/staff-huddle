@@ -2500,7 +2500,7 @@ def show_ai():
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
 
-    if p := st.chat_input("Ask..."):
+       if p := st.chat_input("Ask..."):
         st.session_state.messages.append({"role": "user", "content": p})
         with st.chat_message("user"):
             st.markdown(p)
@@ -2508,22 +2508,30 @@ def show_ai():
         with st.chat_message("assistant"):
             src = search_documents(p, 4)
             web = ""
-            if not src:
+            role = "doc_qa"
+
+            if src:
+                ctx = (
+                    "Answer using ONLY the document context below. "
+                    "If it isn't specific enough to answer confidently, ask a short "
+                    "clarifying question instead of guessing.\n\n"
+                    + "".join([f"- {s.get('filename', 'Source')}: {s.get('ai_summary', '')}\n" for s in src])
+                )
+            else:
+                role = "deep_search"
                 web = agentic_web_search(p, "gov")
                 if not web.strip():
                     web = agentic_web_search(p, "deep")
+                ctx = (
+                    "No matching internal document was found. Answer using ONLY the web "
+                    "results below. If they don't answer the question, say so plainly "
+                    "instead of guessing.\n\nWEB RESULTS:\n" + web
+                )
 
-            ctx = "Answer using only provided context and trusted sources.\n\n"
-            if src:
-                ctx += "".join([f"- {s.get('filename', 'Source')}: {s.get('ai_summary', '')}\n" for s in src])
-            else:
-                ctx += f"WEB:\n{web}"
-
-            # BUG FIX: Include conversation history
             history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-6:]])
             prompt = f"{ctx}\n\nRecent conversation:\n{history}\n\nQuestion: {p}"
 
-            r = ai_system.request(prompt)
+            r = ai_system.request(prompt, role=role)
             resp = r.get("response") if r.get("success") else f"❌ AI Error: {r.get('error', 'Unknown')}"
             st.markdown(resp)
             st.session_state.messages.append({"role": "assistant", "content": resp})
