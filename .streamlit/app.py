@@ -249,7 +249,7 @@ def get_setting(key: str, default: str = "") -> str:
     val = st.session_state.get(f"setting_{key}")
     if val:
         return str(val)
-    
+
     # Then check Supabase
     sb = globals().get("supabase")
     if sb:
@@ -269,7 +269,7 @@ def get_setting(key: str, default: str = "") -> str:
                 }).execute()
             except:
                 pass
-    
+
     # Fallback to secrets/env
     return secret(key, default)
 
@@ -278,7 +278,7 @@ def set_setting(key: str, value: str):
     """Save setting to session state and Supabase."""
     # Always save to session state
     st.session_state[f"setting_{key}"] = value
-    
+
     # Save to Supabase
     sb = globals().get("supabase")
     if sb:
@@ -572,7 +572,7 @@ def compress_data(data: bytes) -> Tuple[bytes, str]:
                 return compressed, "zstd"
         except Exception as e:
             logger.warning(f"Zstd compression failed: {e}")
-            
+
     if COMPRESSION_AVAILABLE:
         try:
             # BUG FIX: Preset 9 crashes Streamlit. Preset 4 or 6 is much safer.
@@ -581,7 +581,7 @@ def compress_data(data: bytes) -> Tuple[bytes, str]:
                 return compressed, "lzma"
         except Exception as e:
             logger.warning(f"LZMA compression failed: {e}")
-            
+
     return data, "none"
 
 
@@ -780,12 +780,12 @@ class StorageSystem:
     def _extract_text(self, file_data: bytes, filename: str) -> str:
         ext = filename.lower().split(".")[-1] if "." in filename else ""
         text = ""
-        
+
         if ext == "pdf" and PDF_AVAILABLE:
             try:
                 reader = pypdf.PdfReader(io.BytesIO(file_data))
                 text = "".join([(p.extract_text() or "") + "\n" for p in reader.pages])
-                
+
                 # BUG FIX: Fallback to OCR if PDF is just scanned images (no text found)
                 if len(text.strip()) < 50 and PDF2IMAGE_AVAILABLE and OCR_AVAILABLE:
                     images = convert_from_bytes(file_data, dpi=150) # Keep DPI moderate for memory
@@ -793,10 +793,10 @@ class StorageSystem:
                         gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
                         _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
                         text += pytesseract.image_to_string(thresh) + "\n"
-                        
+
             except Exception as e:
                 logger.warning(f"PDF extraction failed: {e}")
-                
+
         elif ext in ["jpg", "jpeg", "png", "bmp", "tiff"] and OCR_AVAILABLE:
             try:
                 img = Image.open(io.BytesIO(file_data)).convert("RGB")
@@ -805,7 +805,7 @@ class StorageSystem:
                 text = pytesseract.image_to_string(thresh)
             except Exception as e:
                 logger.warning(f"Image OCR failed: {e}")
-                
+
         return text.strip()
     def upload_document(self, file_data: bytes, filename: str, doc_type: str, user_email: str):
         try:
@@ -860,7 +860,7 @@ class StorageSystem:
                     try:
                         # Heavy lifting happens here, freeing up the Streamlit UI
                         extracted_text = self._extract_text(raw_bytes, fn)
-                        
+
                         text_key = None
                         if extracted_text:
                             # Save full text to R2
@@ -871,7 +871,7 @@ class StorageSystem:
                             # Generate Summary
                             ai = globals().get("ai_system")
                             summary = ai.summarize(extracted_text[:3000]) if ai and len(extracted_text) > 50 else ""
-                            
+
                             # Vector DB Insert
                             if QDRANT_AVAILABLE and qdrant_client:
                                 gen = globals().get("generate_embedding")
@@ -893,7 +893,7 @@ class StorageSystem:
                                     "full_text_preview": extracted_text[:50000], # Max 50KB in Postgres for rapid full-text search
                                     "processing_status": "ready",
                                 }).eq("id", did).execute()
-                                
+
                     except Exception as e:
                         logger.error(f"Background task failed: {e}")
                         if supabase:
@@ -956,7 +956,7 @@ class StorageSystem:
         except Exception:
             return ""
 
-storage_system = StorageSystem() 
+storage_system = StorageSystem()
 # ============================================================
 # AI SEARCH LAYER — embeddings + document search
 # ============================================================
@@ -1153,7 +1153,7 @@ class MultiAI:
     def get_providers(self, role="chat"):
         """Return list of providers for the given role with their API keys."""
         providers = []
-        
+
         # Role-based primary providers
         if role == "doc_qa":
             providers.append({"name": "DeepSeek", "key": self._get_key("DEEPSEEK_API_KEY")})
@@ -1176,7 +1176,7 @@ class MultiAI:
             {"name": "Groq", "key": self._get_key("GROQ_API_KEY")},
         ]
         providers.extend([p for p in backups if p["key"]])
-        
+
         # Remove duplicates and empty keys
         seen = set()
         final = []
@@ -1210,7 +1210,7 @@ class MultiAI:
         except Exception as e:
             logger.warning(f"Qwen call failed: {e}")
             raise
-           return None
+            return None
 
     def _call_groq(self, prompt, key):
         """Call Groq API (fast, generous free tier, Llama/Mixtral models)."""
@@ -1426,13 +1426,13 @@ def agentic_web_search(query, stype="gov"):
                     ])
         except Exception as e:
             logger.warning(f"Serper search failed: {e}")
-    
+
     # Fallback to DuckDuckGo Lite (no JavaScript, simpler HTML)
     try:
         ddg_query = query
         if stype == "gov":
             ddg_query = f"{query} site:gov.in"
-        
+
         r = requests.get(
             "https://lite.duckduckgo.com/lite/",
             params={"q": ddg_query},
@@ -1445,17 +1445,17 @@ def agentic_web_search(query, stype="gov"):
             results = []
             links = re.findall(r'<a rel="nofollow" href="([^"]+)"[^>]*>(.*?)</a>', r.text)
             snippets = re.findall(r'<td class="result-snippet">(.*?)</td>', r.text, re.DOTALL)
-            
+
             for i, (link, title) in enumerate(links[:5]):
                 snippet = snippets[i] if i < len(snippets) else ""
                 snippet = re.sub(r'<[^>]+>', '', snippet).strip()
                 results.append(f"Source: {link}\nSnippet: {snippet[:200]}\n")
-            
+
             if results:
                 return "\n".join(results)
     except Exception as e:
         logger.warning(f"DuckDuckGo search failed: {e}")
-    
+
     return ""
 
 
@@ -2392,7 +2392,6 @@ def show_tapal():
             st.info("Supabase not configured.")
 
 
-
 def show_dispatch():
     """Dispatch label generator with validation, audit log, and print support."""
     u = st.session_state.user or {}
@@ -2598,7 +2597,7 @@ def show_ai():
             # Try AI, but have a fallback
             with st.spinner("Thinking..."):
                 r = ai_system.request(prompt, role=role)
-            
+
             if r.get("success") and r.get("response"):
                 resp = r["response"]
                 st.markdown(resp)
@@ -2607,7 +2606,7 @@ def show_ai():
                 # AI failed - provide fallback response
                 error_msg = r.get('error', 'AI service unavailable')
                 st.warning(f"⚠️ AI service issue: {error_msg}")
-                
+
                 # Create a helpful fallback response
                 fallback = ""
                 if src:
@@ -2624,7 +2623,7 @@ def show_ai():
                     fallback += "\n*AI analysis is currently unavailable. Please review these sources manually.*"
                 else:
                     fallback = "❓ I couldn't find relevant information in your documents or on the web. Please try rephrasing your question or check if AI API keys are configured in Admin Panel → AI Settings."
-                
+
                 st.markdown(fallback)
                 st.session_state.messages.append({"role": "assistant", "content": fallback})
 
@@ -2711,7 +2710,7 @@ def show_messages():
         for m in sent_msgs:
             with st.expander(f"📤 To: {html.escape(str(m.get('recipient_email', 'Unknown')))} — {html.escape(str(m.get('subject') or 'No Subject'))}"):
                 st.caption(str(m.get("created_at", ""))[:16])
-                st.write(html.escape(str(m.get("body", "")))) 
+                st.write(html.escape(str(m.get("body", ""))))
     # ============================================================
 # SYSTEM HEALTH
 # ============================================================
@@ -3102,21 +3101,21 @@ def show_admin():
     # ------------------------------------------------------------
     elif section == "⚙️ AI Settings":
         st.markdown("#### ⚙️ AI API Settings")
-        
+
         st.info(
             "🔑 **Add or update your API keys here.** Keys are stored securely in the database "
             "and used automatically by the AI system. No need to edit Streamlit secrets."
         )
-        
+
         # Tab layout for better organization
         tab1, tab2, tab3 = st.tabs(["🔑 API Keys", "🧪 Test Connection", "📊 Status"])
-        
+
         with tab1:
             st.markdown("##### 🔑 Enter Your API Keys")
-            
+
             with st.form("ai_keys_form"):
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
                     st.markdown("**Primary Providers**")
                     deepseek_key = st.text_input(
@@ -3126,7 +3125,7 @@ def show_admin():
                         placeholder="sk-...",
                         help="Primary for document Q&A. Get free key at platform.deepseek.com"
                     )
-                    
+
                     qwen_key = st.text_input(
                         "Qwen (DashScope) API Key",
                         value=get_setting("QWEN_API_KEY"),
@@ -3134,10 +3133,10 @@ def show_admin():
                         placeholder="sk-...",
                         help="Primary for web search. Get free key at dashscope.aliyun.com"
                     )
-                    
+
                 with col2:
                     st.markdown("**Backup Providers** (Optional)")
-                    
+
                     openai_key = st.text_input(
                         "OpenAI API Key",
                         value=get_setting("OPENAI_API_KEY"),
@@ -3145,7 +3144,7 @@ def show_admin():
                         placeholder="sk-...",
                         help="Used as backup and for embeddings"
                     )
-                    
+
                     gemini_key = st.text_input(
                         "Google Gemini API Key",
                         value=get_setting("GEMINI_API_KEY"),
@@ -3153,9 +3152,9 @@ def show_admin():
                         placeholder="AIza...",
                         help="Free tier available at makersuite.google.com"
                     )
-                
+
                 col3, col4 = st.columns(2)
-                
+
                 with col3:
                     anthropic_key = st.text_input(
                         "Claude (Anthropic) API Key",
@@ -3164,7 +3163,7 @@ def show_admin():
                         placeholder="sk-ant-...",
                         help="Optional backup provider"
                     )
-                    
+
                 with col4:
                     grok_key = st.text_input(
                         "Grok (xAI) API Key",
@@ -3173,11 +3172,11 @@ def show_admin():
                         placeholder="xai-...",
                         help="Optional backup provider"
                     )
-                
+
                 st.divider()
-                
+
                 col5, col6 = st.columns(2)
-                
+
                 with col5:
                     serper_key = st.text_input(
                         "Serper API Key (Web Search)",
@@ -3186,7 +3185,7 @@ def show_admin():
                         placeholder="Optional - free DuckDuckGo fallback works without this",
                         help="Get free key at serper.dev"
                     )
-                    
+
                 with col6:
                     embedding_key = st.text_input(
                         "OpenAI Embedding Key",
@@ -3195,9 +3194,9 @@ def show_admin():
                         placeholder="Optional - uses OpenAI key if blank",
                         help="For vector search and semantic caching"
                     )
-                
+
                 submitted = st.form_submit_button("💾 Save All API Keys", use_container_width=True)
-                
+
                 if submitted:
                     # Save all keys
                     set_setting("DEEPSEEK_API_KEY", deepseek_key.strip())
@@ -3208,10 +3207,10 @@ def show_admin():
                     set_setting("GROK_API_KEY", grok_key.strip())
                     set_setting("SERPER_API_KEY", serper_key.strip())
                     set_setting("OPENAI_EMBEDDING_KEY", embedding_key.strip())
-                    
+
                     show_toast("✅ API keys saved successfully!")
                     st.rerun()
-            
+
             # Quick links to get keys
             with st.expander("🔗 Where to get free API keys?"):
                 st.markdown("""
@@ -3224,14 +3223,14 @@ def show_admin():
                 | **Claude** | ❌ No (paid) | [console.anthropic.com](https://console.anthropic.com/) |
                 | **Grok** | ❌ No (paid) | [console.x.ai](https://console.x.ai/) |
                 """)
-        
+
         with tab2:
             st.markdown("##### 🧪 Test AI Connection")
-            
+
             if st.button("🔍 Test All AI Providers", use_container_width=True):
                 with st.spinner("Testing AI providers..."):
                     test_results = []
-                    
+
                     # Check configured providers for each role
                     for role_label, role_key in [
                         ("💬 Chat", "chat"),
@@ -3244,31 +3243,31 @@ def show_admin():
                             test_results.append(f"✅ {role_label}: {', '.join([p['name'] for p in providers])}")
                         else:
                             test_results.append(f"❌ {role_label}: No providers configured")
-                    
+
                     st.markdown("**Provider Configuration:**")
                     for result in test_results:
                         if "✅" in result:
                             st.success(result)
                         else:
                             st.error(result)
-                    
+
                     # Test actual API call
                     st.markdown("**API Call Test:**")
                     with st.spinner("Making test API call..."):
                         test_result = ai_system.request(
-                            "Reply with exactly: OK", 
+                            "Reply with exactly: OK",
                             role="chat"
                         )
-                        
+
                         if test_result.get("success"):
                             st.success(f"✅ API Call Successful via {test_result.get('provider')}")
                             st.info(f"Response: {test_result.get('response', '')[:100]}")
                         else:
                             st.error(f"❌ API Call Failed: {test_result.get('error', 'Unknown error')}")
-        
+
         with tab3:
             st.markdown("##### 📊 Current Configuration Status")
-            
+
             # Show current status
             status_data = []
             providers_config = [
@@ -3281,7 +3280,7 @@ def show_admin():
                 ("Serper", "SERPER_API_KEY", "Web Search API"),
                 ("OpenAI Embedding", "OPENAI_EMBEDDING_KEY", "Vector Search"),
             ]
-            
+
             for provider, setting_key, purpose in providers_config:
                 key = get_setting(setting_key)
                 status = "✅ Configured" if key else "❌ Not Configured"
@@ -3292,16 +3291,16 @@ def show_admin():
                     "Status": status,
                     "Key": masked_key
                 })
-            
+
             df = pd.DataFrame(status_data)
             st.dataframe(df, use_container_width=True)
-            
+
             # System health indicators
             st.divider()
             st.markdown("**System Status:**")
-            
+
             col1, col2, col3 = st.columns(3)
-            
+
             with col1:
                 if redis_client:
                     try:
@@ -3311,7 +3310,7 @@ def show_admin():
                         st.error("❌ Redis Cache: Failed")
                 else:
                     st.warning("⚠️ Redis Cache: Not configured")
-            
+
             with col2:
                 if qdrant_client:
                     try:
@@ -3321,7 +3320,7 @@ def show_admin():
                         st.error("❌ Vector DB: Failed")
                 else:
                     st.warning("⚠️ Vector DB: Not configured")
-            
+
             with col3:
                 if supabase:
                     try:
