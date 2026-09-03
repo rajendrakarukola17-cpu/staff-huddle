@@ -807,7 +807,7 @@ class StorageSystem:
                 logger.warning(f"Image OCR failed: {e}")
                 
         return text.strip()
-   def upload_document(self, file_data: bytes, filename: str, doc_type: str, user_email: str):
+    def upload_document(self, file_data: bytes, filename: str, doc_type: str, user_email: str):
         try:
             if not file_data:
                 return {"success": False, "error": "Empty file"}
