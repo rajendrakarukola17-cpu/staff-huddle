@@ -2396,28 +2396,19 @@ def show_dispatch():
                 height=0,
             )
 
-def document_card(doc):
-    doc_id = str(doc.get("id", ""))
-    if not doc_id:
-        return
-    with st.expander(f"📄 {html.escape(str(doc.get('filename', 'Document')))}"):
-        st.write(f"Summary: {doc.get('ai_summary') or '(Processing)'}")
-        presigned = storage_system.get_presigned_url(doc.get("file_key", ""), doc.get("storage_tier", "hot"))
-        if presigned:
-            st.markdown(f"[⬇️ Download]({presigned})")
         else:
-if st.button("Download", key=f"dl_{doc_id}"):
-    with st.spinner("Decompressing securely..."):
-        file_data = storage_system.download_document(doc_id)
-        if file_data:
-            st.download_button(
-                label="Save to Device",
-                data=file_data, # Streamlit automatically handles bytes efficiently here
-                file_name=doc.get("filename", "file"),
-                key=f"sv_{doc_id}"
-            )
-        else:
-            st.error("Unable to download file.")
+            if st.button("Download", key=f"dl_{doc_id}"):
+                with st.spinner("Decompressing securely..."):
+                    file_data = storage_system.download_document(doc_id)
+                    if file_data:
+                        st.download_button(
+                            label="Save to Device",
+                            data=file_data,  # Streamlit handles bytes efficiently
+                            file_name=doc.get("filename", "file"),
+                            key=f"sv_{doc_id}"
+                        )
+                    else:
+                        st.error("Unable to download file.")
 
 
 def show_documents():
