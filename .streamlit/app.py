@@ -956,7 +956,93 @@ class StorageSystem:
         except Exception:
             return ""
 
-storage_system = StorageSystem()
+storage_system = StorageSystem() 
+# ============================================================
+# AI SEARCH LAYER — embeddings + document search
+# ============================================================
+def generate_embedding(text: str) -> list:
+    """768-dim vector via Gemini text-embedding-004, for Qdrant semantic search."""
+    key = get_setting("GEMINI_API_KEY") or secret("GEMINI_API_KEY")
+    if not key or not text:
+        return [0.0] * 768
+    try:
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={key}",
+            json={
+                "model": "models/text-embedding-004",
+                "content": {"parts": [{"text": text[:2000]}]},
+            },
+            timeout=15,
+        )
+        if r.status_code == 200:
+            vec = r.json().get("embedding", {}).get("values", [])
+            if vec:
+                return vec
+        else:
+            logger.warning(f"Embedding API error: {r.status_code} - {r.text[:100]}")
+    except Exception as e:
+        logger.warning(f"Embedding generation failed: {e}")
+    return [0.0] * 768
+
+
+def search_documents(query: str, limit: int = 4) -> list:
+    """Layered search: fast keyword match -> fuzzy match -> semantic (Qdrant)."""
+    query = sanitize_search_query(query)
+    if not query or not supabase:
+        return []
+
+    results = []
+    try:
+        results = (
+            supabase.table("documents")
+            .select("id, filename, doc_type, ai_summary, full_text_preview, storage_tier, file_key")
+            .or_(f"filename.ilike.%{query}%,ai_summary.ilike.%{query}%,full_text_preview.ilike.%{query}%")
+            .eq("processing_status", "ready")
+            .limit(limit)
+            .execute()
+            .data or []
+        )
+    except Exception as e:
+        logger.warning(f"Keyword search failed: {e}")
+
+    if not results and FUZZY_AVAILABLE:
+        try:
+            all_docs = (
+                supabase.table("documents")
+                .select("id, filename, doc_type, ai_summary, full_text_preview, storage_tier, file_key")
+                .eq("processing_status", "ready")
+                .limit(200)
+                .execute()
+                .data or []
+            )
+            choices = {d["id"]: f"{d.get('filename','')} {d.get('ai_summary','')}" for d in all_docs}
+            matches = process.extract(query, choices, scorer=fuzz.partial_ratio, limit=limit)
+            matched_ids = {m[2] for m in matches if m[1] >= 60}
+            results = [d for d in all_docs if d["id"] in matched_ids]
+        except Exception as e:
+            logger.warning(f"Fuzzy search failed: {e}")
+
+    if not results and QDRANT_AVAILABLE and qdrant_client:
+        try:
+            hits = qdrant_client.search(
+                collection_name="rta_documents",
+                query_vector=generate_embedding(query),
+                limit=limit,
+                score_threshold=0.55,
+            )
+            doc_ids = [h.payload.get("doc_id") for h in hits if h.payload.get("doc_id")]
+            if doc_ids:
+                results = (
+                    supabase.table("documents")
+                    .select("id, filename, doc_type, ai_summary, full_text_preview, storage_tier, file_key")
+                    .in_("id", doc_ids)
+                    .execute()
+                    .data or []
+                )
+        except Exception as e:
+            logger.warning(f"Semantic search failed: {e}")
+
+    return results
 
 
 # ============================================================
