@@ -1037,51 +1037,86 @@ class MultiAI:
             return secret(secret_name).strip()
         return ""
 
-    def get_providers(self):
-        """Return providers in serial fallback order."""
-        providers = []
+        def request(self, prompt, role="chat"):
+        """Execute AI request with serial fallback across providers for the given role."""
+        business_metrics.increment("ai_queries_total")
+        h = hashlib.md5(f"{role}:{prompt}".encode()).hexdigest()
 
-        k = self._get_key("QWEN_API_KEY", "QWEN_API_KEY")
-        if k:
-            providers.append({"name": "Qwen", "key": k})
+        # 1. Exact Match Cache (Redis) — unchanged, just uses the role-aware hash now
+        if redis_client:
+            try:
+                c = redis_client.get(f"ai_cache:{h}")
+                if c:
+                    business_metrics.increment("ai_queries_cached")
+                    return {"success": True, "response": json.loads(c), "provider": "cache"}
+            except Exception:
+                pass
 
-        k = self._get_key("GROK_API_KEY", "GROK_API_KEY")
-        if k:
-            providers.append({"name": "Grok", "key": k})
+        # 2. Semantic Cache (Qdrant) — unchanged
+        if qdrant_client:
+            try:
+                hits = qdrant_client.search(
+                    collection_name="ai_semantic_cache",
+                    query_vector=generate_embedding(prompt),
+                    limit=1,
+                    score_threshold=0.90,
+                )
+                if hits:
+                    business_metrics.increment("ai_queries_cached")
+                    return {"success": True, "response": hits[0].payload["response"], "provider": "semantic_cache"}
+            except Exception:
+                pass
 
-        k = self._get_key("DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY")
-        if k:
-            providers.append({"name": "DeepSeek", "key": k})
+        # 3. Serial Provider Fallback — now role-aware
+        providers = self.get_providers(role=role)
+        if not providers:
+            return {"success": False, "error": f"No API keys configured for role '{role}'. Go to Admin Panel → AI Settings."}
 
-        k = self._get_key("GEMINI_API_KEY", "GEMINI_API_KEY")
-        if k:
-            providers.append({"name": "Gemini", "key": k})
+        errors = []
+        for p in providers:
+            resp = None
+            try:
+                if p["name"] == "Qwen":
+                    resp = qwen_breaker.call(self._call_qwen, prompt, p["key"])
+                elif p["name"] == "Grok":
+                    resp = grok_breaker.call(self._call_grok, prompt, p["key"])
+                elif p["name"] == "DeepSeek":
+                    resp = deepseek_breaker.call(self._call_deepseek, prompt, p["key"])
+                elif p["name"] == "Gemini":
+                    resp = gemini_breaker.call(self._call_gemini, prompt, p["key"])
+                elif p["name"] == "OpenAI":
+                    resp = openai_breaker.call(self._call_openai, prompt, p["key"])
+                elif p["name"] == "Anthropic":
+                    resp = anthropic_breaker.call(self._call_anthropic, prompt, p["key"])
 
-        k = self._get_key("OPENAI_API_KEY", "OPENAI_API_KEY")
-        if k:
-            providers.append({"name": "OpenAI", "key": k})
+                if resp:
+                    if redis_client:
+                        try:
+                            redis_client.setex(f"ai_cache:{h}", 86400, json.dumps(resp))
+                        except Exception:
+                            pass
+                    if qdrant_client:
+                        try:
+                            qdrant_client.upsert(
+                                collection_name="ai_semantic_cache",
+                                points=[PointStruct(
+                                    id=uuid.uuid4().hex,
+                                    vector=generate_embedding(prompt),
+                                    payload={"query": prompt, "response": resp},
+                                )],
+                            )
+                        except Exception:
+                            pass
+                    return {"success": True, "response": resp, "provider": p["name"]}
+            except Exception as e:
+                errors.append(f"{p['name']}: {str(e)[:80]}")
+                continue
 
-        k = self._get_key("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
-        if k:
-            providers.append({"name": "Anthropic", "key": k})
+        return {"success": False, "error": f"All providers failed for role '{role}': {'; '.join(errors)}"}
 
-        return providers
-
-    def _call_qwen(self, prompt, key):
-        try:
-            r = requests.post(
-                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": "qwen-turbo", "messages": [{"role": "user", "content": prompt}]},
-                timeout=20,
-            )
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"].strip()
-            if r.status_code == 429:
-                raise Exception("Rate limited")
-        except Exception:
-            pass
-        return None
+    def summarize(self, text):
+        r = self.request(f"Summarize this in 2-3 sentences: {text[:3000]}", role="summarize")
+        return r.get("response") if r.get("success") else None
 
     def _call_grok(self, prompt, key):
         try:
