@@ -1355,8 +1355,8 @@ class MultiAI:
             try:
                 if p["name"] == "Qwen":
                     resp = qwen_breaker.call(self._call_qwen, prompt, p["key"])
-                elif p["name"] == "Grok":
-                    resp = grok_breaker.call(self._call_grok, prompt, p["key"])
+                elif p["name"] == "Groq":
+                    resp = groq_breaker.call(self._call_groq, prompt, p["key"])
                 elif p["name"] == "DeepSeek":
                     resp = deepseek_breaker.call(self._call_deepseek, prompt, p["key"])
                 elif p["name"] == "Gemini":
