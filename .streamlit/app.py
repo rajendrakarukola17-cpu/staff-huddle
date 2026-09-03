@@ -1282,30 +1282,35 @@ def agentic_web_search(query, stype="gov"):
 # VECTOR EMBEDDINGS & SEARCH (BUG FIX: fuzzy search tuple fix)
 # ============================================================
 def generate_embedding(text):
-    """Generate 384-dimensional vector for Qdrant."""
+    """Generate 384-dimensional vector for Qdrant using OpenAI embeddings."""
     dim = 384
     text = str(text or "")[:1500]
-    key = get_setting("GEMINI_EMBEDDING_KEY") or secret("GEMINI_EMBEDDING_KEY") or secret("GEMINI_API_KEY")
+    key = (
+        get_setting("OPENAI_EMBEDDING_KEY")
+        or get_setting("OPENAI_API_KEY")
+        or secret("OPENAI_EMBEDDING_KEY")
+        or secret("OPENAI_API_KEY")
+    )
     if key:
         try:
             r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={key}",
-                json={"content": {"parts": [{"text": text}]}},
+                "https://api.openai.com/v1/embeddings",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": "text-embedding-3-small", "input": text, "dimensions": dim},
                 timeout=10,
             )
             if r.status_code == 200:
-                v = r.json()["embedding"]["values"]
+                v = r.json()["data"][0]["embedding"]
                 return v[:dim] + [0.0] * (dim - len(v))
-        except Exception:
-            pass
-    # Fallback hash-based embedding
+        except Exception as e:
+            logger.warning(f"OpenAI embedding failed: {e}")
+    # Fallback: deterministic hash-based embedding (free, lower quality, keeps app working if key is missing)
     words = text.lower().split()
     v = np.zeros(dim)
     for w in words:
         v[int(hashlib.md5(w.encode()).hexdigest()[:8], 16) % dim] += 1
     n = np.linalg.norm(v)
     return (v / n if n > 0 else v).tolist()
-
 
 def search_documents(query, limit=10):
     """Hybrid search: Fuzzy -> Vector -> SQL."""
