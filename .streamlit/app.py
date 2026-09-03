@@ -1271,11 +1271,10 @@ class MultiAI:
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"]
             if r.status_code == 429:
                 raise Exception("Rate limited")
-            logger.warning(f"Gemini API error: {r.status_code} - {r.text[:100]}")
-        except Exception as e:
-            logger.warning(f"Gemini call failed: {e}")
-            raise
-        return None
+                   raise Exception(f"HTTP {r.status_code}: {r.text[:100]}")
+    except Exception as e:
+        logger.warning(f"Gemini call failed: {e}")
+        raise
 
     def _call_openai(self, prompt, key):
         """Call OpenAI API."""
