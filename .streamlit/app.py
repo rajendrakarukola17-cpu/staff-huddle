@@ -3046,6 +3046,33 @@ def show_admin():
         ]:
             active = ai_system.get_providers(role=role_key)
             st.write(f"**{role_label}**: {', '.join([p['name'] for p in active]) or '❌ none configured'}")
+                    st.divider()
+        st.markdown("##### 🧪 Test AI Connection")
+        
+        if st.button("Test AI Providers", key="test_ai_providers"):
+            with st.spinner("Testing AI providers..."):
+                test_results = []
+                
+                # Check configured providers
+                for role in ["chat", "doc_qa", "deep_search", "summarize"]:
+                    providers = ai_system.get_providers(role=role)
+                    if providers:
+                        test_results.append(f"✅ {role}: {', '.join([p['name'] for p in providers])}")
+                    else:
+                        test_results.append(f"❌ {role}: No providers configured")
+                
+                # Test actual API call
+                test_result = ai_system.request("Say 'OK' if you can hear me", role="chat")
+                if test_result.get("success"):
+                    test_results.append(f"✅ API Call Test: Success via {test_result.get('provider')}")
+                else:
+                    test_results.append(f"❌ API Call Test: {test_result.get('error', 'Failed')}")
+                
+                for result in test_results:
+                    if "✅" in result:
+                        st.success(result)
+                    else:
+                        st.error(result)
     # ------------------------------------------------------------
     # AI TRAINING
     # ------------------------------------------------------------
