@@ -1,45 +1,21 @@
-# Core — required, app will not start without these
-streamlit>=1.37
-supabase>=2.5
+streamlit
+pandas
+numpy
+requests
+supabase
+boto3
+upstash-redis
+qdrant-client
+bcrypt
+thefuzz
+python-Levenshtein
+cryptography
 streamlit-cookies-controller
 streamlit-option-menu
-requests
-bcrypt
-numpy
-pandas
-cryptography
-
-# --- Everything below is optional (app degrades gracefully without it) ---
-# Uncomment only what you actually use, to keep the deploy fast & light.
-
-# Caching (Upstash Redis free tier)
-# upstash-redis
-
-# Cloud storage (R2 / B2 / MinIO all use boto3's S3 client)
-# boto3
-# b2sdk
-
-# Compression
-# zstandard
-
-# PDF text extraction
-# pypdf
-
-# Vector search / RAG
-# qdrant-client
-
-# OCR for scanned PDFs & images (also needs packages.txt below + heavy)
-# opencv-python-headless
-# pytesseract
-# Pillow
-# pdf2image
-
-# HTML parsing
-# beautifulsoup4
-
-# Error tracking
-# sentry-sdk
-
-# Fuzzy filename search
-# thefuzz
-# python-Levenshtein
+pypdf
+opencv-python-headless
+pytesseract
+Pillow
+pdf2image
+zstandard
+sentry-sdk
