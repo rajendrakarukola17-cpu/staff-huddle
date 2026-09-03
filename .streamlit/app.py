@@ -3047,7 +3047,7 @@ def show_admin():
                             "SERPER_API_KEY": serper_key.strip(),
                             "OPENAI_EMBEDDING_KEY": embedding_key.strip(),
                         }
-                          failed = [k for k, v in saves.items() if not set_setting(k, v)]
+                        failed = [k for k, v in saves.items() if not set_setting(k, v)]
                         if failed:
                             show_toast(f"⚠️ Saved locally but FAILED to persist to database: {', '.join(failed)}", "error")
                         else:
