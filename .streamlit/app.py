@@ -566,18 +566,22 @@ qdrant_client = init_qdrant()
 def compress_data(data: bytes) -> Tuple[bytes, str]:
     if ZSTD_AVAILABLE:
         try:
-            compressed = zstd.ZstdCompressor(level=19).compress(data)
+            # BUG FIX: Level 19 is too heavy. Level 12 gives excellent compression with low memory overhead.
+            compressed = zstd.ZstdCompressor(level=12).compress(data)
             if len(compressed) < len(data):
                 return compressed, "zstd"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Zstd compression failed: {e}")
+            
     if COMPRESSION_AVAILABLE:
         try:
-            compressed = lzma.compress(data, preset=9)
+            # BUG FIX: Preset 9 crashes Streamlit. Preset 4 or 6 is much safer.
+            compressed = lzma.compress(data, preset=6)
             if len(compressed) < len(data):
                 return compressed, "lzma"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"LZMA compression failed: {e}")
+            
     return data, "none"
 
 
