@@ -3043,7 +3043,7 @@ def show_admin():
     # ------------------------------------------------------------
     # AI SETTINGS
     # ------------------------------------------------------------
-      elif section == "⚙️ AI Settings":
+    elif section == "⚙️ AI Settings":
         st.markdown("#### ⚙️ AI API Settings")
 
         st.markdown("##### 🧭 How work is routed")
