@@ -1029,6 +1029,7 @@ class MultiAI:
     """Handles AI requests with circuit breakers, semantic caching, and serial fallback."""
 
     def _get_key(self, setting_name, secret_name=None):
+        """Read API key from Admin Panel settings OR secrets.toml."""
         key = get_setting(setting_name)
         if key:
             return key.strip()
@@ -1039,7 +1040,8 @@ class MultiAI:
     def get_providers(self, role="chat"):
         """Return list of providers for the given role with their API keys."""
         providers = []
-        # Embedding handled separately (not part of chat providers)
+        
+        # Role-based primary providers
         if role == "doc_qa":
             providers.append({"name": "DeepSeek", "key": self._get_key("DEEPSEEK_API_KEY")})
             providers.append({"name": "Qwen", "key": self._get_key("QWEN_API_KEY")})
@@ -1061,6 +1063,7 @@ class MultiAI:
             {"name": "Grok", "key": self._get_key("GROK_API_KEY")},
         ]
         providers.extend([p for p in backups if p["key"]])
+        
         # Remove duplicates and empty keys
         seen = set()
         final = []
@@ -1069,6 +1072,134 @@ class MultiAI:
                 seen.add(p["name"])
                 final.append(p)
         return final
+
+    def _call_qwen(self, prompt, key):
+        """Call Qwen API (OpenAI-compatible)."""
+        try:
+            r = requests.post(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "qwen-plus",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1000
+                },
+                timeout=20,
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            if r.status_code == 429:
+                raise Exception("Rate limited")
+            logger.warning(f"Qwen API error: {r.status_code} - {r.text[:100]}")
+        except Exception as e:
+            logger.warning(f"Qwen call failed: {e}")
+            raise
+        return None
+
+    def _call_grok(self, prompt, key):
+        """Call Grok API."""
+        try:
+            r = requests.post(
+                "https://api.x.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": "grok-2-latest", "messages": [{"role": "user", "content": prompt}]},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            if r.status_code == 429:
+                raise Exception("Rate limited")
+            logger.warning(f"Grok API error: {r.status_code} - {r.text[:100]}")
+        except Exception as e:
+            logger.warning(f"Grok call failed: {e}")
+            raise
+        return None
+
+    def _call_deepseek(self, prompt, key):
+        """Call DeepSeek API."""
+        try:
+            r = requests.post(
+                "https://api.deepseek.com/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}]},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            if r.status_code == 429:
+                raise Exception("Rate limited")
+            logger.warning(f"DeepSeek API error: {r.status_code} - {r.text[:100]}")
+        except Exception as e:
+            logger.warning(f"DeepSeek call failed: {e}")
+            raise
+        return None
+
+    def _call_gemini(self, prompt, key):
+        """Call Gemini API."""
+        try:
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            if r.status_code == 429:
+                raise Exception("Rate limited")
+            logger.warning(f"Gemini API error: {r.status_code} - {r.text[:100]}")
+        except Exception as e:
+            logger.warning(f"Gemini call failed: {e}")
+            raise
+        return None
+
+    def _call_openai(self, prompt, key):
+        """Call OpenAI API."""
+        try:
+            r = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": prompt}]},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            if r.status_code == 429:
+                raise Exception("Rate limited")
+            logger.warning(f"OpenAI API error: {r.status_code} - {r.text[:100]}")
+        except Exception as e:
+            logger.warning(f"OpenAI call failed: {e}")
+            raise
+        return None
+
+    def _call_anthropic(self, prompt, key):
+        """Call Anthropic API."""
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "claude-3-5-haiku-20241022",
+                    "max_tokens": 500,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=15,
+            )
+            if r.status_code == 200:
+                return r.json()["content"][0]["text"].strip()
+            if r.status_code == 429:
+                raise Exception("Rate limited")
+            logger.warning(f"Anthropic API error: {r.status_code} - {r.text[:100]}")
+        except Exception as e:
+            logger.warning(f"Anthropic call failed: {e}")
+            raise
+        return None
 
     def request(self, prompt, role="chat"):
         """Execute AI request with serial fallback across providers for the given role."""
@@ -1149,180 +1280,12 @@ class MultiAI:
         return {"success": False, "error": f"All providers failed for role '{role}': {'; '.join(errors)}"}
 
     def summarize(self, text):
+        """Summarize text using AI."""
         r = self.request(f"Summarize this in 2-3 sentences: {text[:3000]}", role="summarize")
-        return r.get("response") if r.get("success") else None
-
-    # Keep all _call_* methods as they are (ensure proper indentation)
-    
-    def _call_grok(self, prompt, key):
-        try:
-            r = requests.post(
-                "https://api.x.ai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": "grok-2-latest", "messages": [{"role": "user", "content": prompt}]},
-                timeout=20,
-            )
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"].strip()
-            if r.status_code == 429:
-                raise Exception("Rate limited")
-        except Exception:
-            pass
-        return None
-
-    def _call_deepseek(self, prompt, key):
-        try:
-            r = requests.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}]},
-                timeout=20,
-            )
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"].strip()
-            if r.status_code == 429:
-                raise Exception("Rate limited")
-        except Exception:
-            pass
-        return None
-
-    def _call_gemini(self, prompt, key):
-        try:
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
-                json={"contents": [{"parts": [{"text": prompt}]}]},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            if r.status_code == 429:
-                raise Exception("Rate limited")
-        except Exception:
-            pass
-        return None
-
-    def _call_openai(self, prompt, key):
-        try:
-            r = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": prompt}]},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"].strip()
-            if r.status_code == 429:
-                raise Exception("Rate limited")
-        except Exception:
-            pass
-        return None
-
-    def _call_anthropic(self, prompt, key):
-        try:
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-                json={
-                    "model": "claude-3-5-haiku-20241022",
-                    "max_tokens": 500,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=15,
-            )
-            if r.status_code == 200:
-                return r.json()["content"][0]["text"].strip()
-            if r.status_code == 429:
-                raise Exception("Rate limited")
-        except Exception:
-            pass
-        return None
-
-    def request(self, prompt):
-        """Execute AI request with serial fallback across all providers."""
-        business_metrics.increment("ai_queries_total")
-
-        h = hashlib.md5(prompt.encode()).hexdigest()
-
-        # 1. Exact Match Cache (Redis)
-        if redis_client:
-            try:
-                c = redis_client.get(f"ai_cache:{h}")
-                if c:
-                    business_metrics.increment("ai_queries_cached")
-                    return {"success": True, "response": json.loads(c), "provider": "cache"}
-            except Exception:
-                pass
-
-        # 2. Semantic Cache (Qdrant)
-        if qdrant_client:
-            try:
-                hits = qdrant_client.search(
-                    collection_name="ai_semantic_cache",
-                    query_vector=generate_embedding(prompt),
-                    limit=1,
-                    score_threshold=0.90,
-                )
-                if hits:
-                    business_metrics.increment("ai_queries_cached")
-                    return {"success": True, "response": hits[0].payload["response"], "provider": "semantic_cache"}
-            except Exception:
-                pass
-
-        # 3. Serial Provider Fallback
-        providers = self.get_providers()
-        if not providers:
-            return {"success": False, "error": "No API keys configured. Go to Admin Panel → AI Settings."}
-
-        errors = []
-        for p in providers:
-            resp = None
-            try:
-                if p["name"] == "Qwen":
-                    resp = qwen_breaker.call(self._call_qwen, prompt, p["key"])
-                elif p["name"] == "Grok":
-                    resp = grok_breaker.call(self._call_grok, prompt, p["key"])
-                elif p["name"] == "DeepSeek":
-                    resp = deepseek_breaker.call(self._call_deepseek, prompt, p["key"])
-                elif p["name"] == "Gemini":
-                    resp = gemini_breaker.call(self._call_gemini, prompt, p["key"])
-                elif p["name"] == "OpenAI":
-                    resp = openai_breaker.call(self._call_openai, prompt, p["key"])
-                elif p["name"] == "Anthropic":
-                    resp = anthropic_breaker.call(self._call_anthropic, prompt, p["key"])
-
-                if resp:
-                    # Cache successful response
-                    if redis_client:
-                        try:
-                            redis_client.setex(f"ai_cache:{h}", 86400, json.dumps(resp))
-                        except Exception:
-                            pass
-                    if qdrant_client:
-                        try:
-                            qdrant_client.upsert(
-                                collection_name="ai_semantic_cache",
-                                points=[PointStruct(
-                                    id=uuid.uuid4().hex,
-                                    vector=generate_embedding(prompt),
-                                    payload={"query": prompt, "response": resp},
-                                )],
-                            )
-                        except Exception:
-                            pass
-                    return {"success": True, "response": resp, "provider": p["name"]}
-            except Exception as e:
-                errors.append(f"{p['name']}: {str(e)[:80]}")
-                continue
-
-        return {"success": False, "error": f"All providers failed: {'; '.join(errors)}"}
-
-    def summarize(self, text):
-        r = self.request(f"Summarize this in 2-3 sentences: {text[:3000]}")
         return r.get("response") if r.get("success") else None
 
 
 ai_system = MultiAI()
-
 
 # ============================================================
 # AGENTIC WEB SEARCH
