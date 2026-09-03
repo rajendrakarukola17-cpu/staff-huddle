@@ -2614,7 +2614,7 @@ def show_system_health():
             except Exception:
                 storage_status.append("❌ R2")
 
-                if b2_client:
+        if b2_client:
             try:
                 b2_client.head_bucket(Bucket=storage_system.cold_bucket)
                 storage_status.append("✅ B2")
@@ -2633,7 +2633,6 @@ def show_system_health():
                 st.warning("⚠️ Qdrant: Disabled")
         except Exception:
             st.error("❌ Qdrant: Down")
-
 # ============================================================
 # OFFICE DIRECTORY HELPER
 # ============================================================
