@@ -244,9 +244,13 @@ def secret(key: str, default: str = "") -> str:
 
 
 def get_setting(key: str, default: str = "") -> str:
+    """Get setting from session state, Supabase, or environment."""
+    # First check session state
     val = st.session_state.get(f"setting_{key}")
     if val:
         return str(val)
+    
+    # Then check Supabase
     sb = globals().get("supabase")
     if sb:
         try:
@@ -255,19 +259,43 @@ def get_setting(key: str, default: str = "") -> str:
                 val = res.data[0]["value"]
                 st.session_state[f"setting_{key}"] = val
                 return val
-        except Exception:
-            pass
+        except Exception as e:
+            # Table might not exist, try to create it
+            try:
+                sb.table("app_settings").insert({
+                    "key": key,
+                    "value": default,
+                    "updated_at": now_utc().isoformat()
+                }).execute()
+            except:
+                pass
+    
+    # Fallback to secrets/env
     return secret(key, default)
 
 
 def set_setting(key: str, value: str):
+    """Save setting to session state and Supabase."""
+    # Always save to session state
     st.session_state[f"setting_{key}"] = value
+    
+    # Save to Supabase
     sb = globals().get("supabase")
     if sb:
         try:
-            sb.table("app_settings").upsert(
-                {"key": key, "value": value, "updated_at": now_utc().isoformat()}
-            ).execute()
+            # Try upsert
+            existing = sb.table("app_settings").select("id").eq("key", key).execute()
+            if existing.data:
+                sb.table("app_settings").update({
+                    "value": value,
+                    "updated_at": now_utc().isoformat()
+                }).eq("key", key).execute()
+            else:
+                sb.table("app_settings").insert({
+                    "key": key,
+                    "value": value,
+                    "updated_at": now_utc().isoformat()
+                }).execute()
         except Exception as e:
             logger.error(f"Failed to save setting {key}: {e}")
 
