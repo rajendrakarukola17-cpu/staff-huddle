@@ -2614,9 +2614,9 @@ def show_system_health():
             except Exception:
                 storage_status.append("❌ R2")
 
-        if b2_client:
+                if b2_client:
             try:
-                b2_client.list_buckets()
+                b2_client.head_bucket(Bucket=storage_system.cold_bucket)
                 storage_status.append("✅ B2")
             except Exception as e:
                 storage_status.append("❌ B2")
