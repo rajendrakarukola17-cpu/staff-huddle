@@ -284,31 +284,31 @@ def get_setting(key: str, default: str = "") -> str:
     return secret(key, default)
 
 
-def set_setting(key: str, value: str):
-    """Save setting to session state and Supabase."""
-    # Always save to session state
+def set_setting(key: str, value: str) -> bool:
+    """Save setting to session state and Supabase. Returns True only if Supabase write succeeded."""
     st.session_state[f"setting_{key}"] = value
 
-    # Save to Supabase
     sb = globals().get("supabase")
-    if sb:
-        try:
-            # Try upsert
-            existing = sb.table("app_settings").select("id").eq("key", key).execute()
-            if existing.data:
-                sb.table("app_settings").update({
-                    "value": value,
-                    "updated_at": now_utc().isoformat()
-                }).eq("key", key).execute()
-            else:
-                sb.table("app_settings").insert({
-                    "key": key,
-                    "value": value,
-                    "updated_at": now_utc().isoformat()
-                }).execute()
-        except Exception as e:
-            logger.error(f"Failed to save setting {key}: {e}")
+    if not sb:
+        return False
 
+    try:
+        existing = sb.table("app_settings").select("id").eq("key", key).execute()
+        if existing.data:
+            sb.table("app_settings").update({
+                "value": value,
+                "updated_at": now_utc().isoformat()
+            }).eq("key", key).execute()
+        else:
+            sb.table("app_settings").insert({
+                "key": key,
+                "value": value,
+                "updated_at": now_utc().isoformat()
+            }).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save setting {key}: {e}")
+        return False
 
 def sanitize_input(text: str) -> str:
     if not text:
