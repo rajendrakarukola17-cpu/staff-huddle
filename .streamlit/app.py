@@ -3009,83 +3009,62 @@ def show_admin():
     # ------------------------------------------------------------
     # AI SETTINGS
     # ------------------------------------------------------------
-    elif section == "⚙️ AI Settings":
+      elif section == "⚙️ AI Settings":
         st.markdown("#### ⚙️ AI API Settings")
 
-        providers = ai_system.get_providers()
-
+        st.markdown("##### 🧭 How work is routed")
         st.info(
-            f"Active providers: {len(providers)} — "
-            f"{', '.join([p['name'] for p in providers]) or 'None'}"
-        )
-
-        st.info(
-            "Providers are tried in this order: Qwen → Grok → DeepSeek → Gemini → OpenAI → Claude. "
-            "Add at least one key. If one fails, the next is tried automatically."
+            "**Embeddings** (search/cache): OpenAI\n\n"
+            "**Document/PDF Q&A**: DeepSeek → Qwen → backups\n\n"
+            "**Deep Search** (web via DuckDuckGo): Qwen → DeepSeek → backups\n\n"
+            "**Summarization** (on upload): DeepSeek → Qwen → backups\n\n"
+            "**Backups** (used only if the above fail): Gemini → OpenAI → Claude → Grok"
         )
 
         with st.form("ai_settings_form"):
-            qwen_key = st.text_input(
-                "1️⃣ Qwen API Key",
-                value=get_setting("QWEN_API_KEY"),
+            st.markdown("##### 🔎 Embeddings — OpenAI")
+            openai_embed_key = st.text_input(
+                "OpenAI Embedding Key (leave blank to reuse the OpenAI key below)",
+                value=get_setting("OPENAI_EMBEDDING_KEY"),
                 type="password",
             )
 
-            grok_key = st.text_input(
-                "2️⃣ Grok API Key",
-                value=get_setting("GROK_API_KEY"),
-                type="password",
-            )
+            st.divider()
+            st.markdown("##### 📄 Document / PDF Q&A — primary: DeepSeek")
+            deepseek_key = st.text_input("DeepSeek API Key", value=get_setting("DEEPSEEK_API_KEY"), type="password")
 
-            deepseek_key = st.text_input(
-                "3️⃣ DeepSeek API Key",
-                value=get_setting("DEEPSEEK_API_KEY"),
-                type="password",
-            )
+            st.divider()
+            st.markdown("##### 🌐 Deep Search — primary: Qwen")
+            qwen_key = st.text_input("Qwen API Key", value=get_setting("QWEN_API_KEY"), type="password")
+            st.caption("Web results come from DuckDuckGo — free, no key needed.")
 
-            gemini_key = st.text_input(
-                "4️⃣ Gemini API Key",
-                value=get_setting("GEMINI_API_KEY"),
-                type="password",
-            )
-
-            openai_key = st.text_input(
-                "5️⃣ OpenAI API Key",
-                value=get_setting("OPENAI_API_KEY"),
-                type="password",
-            )
-
-            anthropic_key = st.text_input(
-                "6️⃣ Claude API Key",
-                value=get_setting("ANTHROPIC_API_KEY"),
-                type="password",
-            )
-
-            gemini_embed_key = st.text_input(
-                "Gemini Embedding Key",
-                value=get_setting("GEMINI_EMBEDDING_KEY"),
-                type="password",
-            )
-
-            serper_key = st.text_input(
-                "Serper Web Search Key",
-                value=get_setting("SERPER_API_KEY"),
-                type="password",
-            )
+            st.divider()
+            st.markdown("##### 🔁 Backup Providers (used only when the above fail or hit limits)")
+            gemini_key = st.text_input("Gemini API Key", value=get_setting("GEMINI_API_KEY"), type="password")
+            openai_key = st.text_input("OpenAI API Key (chat backup)", value=get_setting("OPENAI_API_KEY"), type="password")
+            anthropic_key = st.text_input("Claude API Key", value=get_setting("ANTHROPIC_API_KEY"), type="password")
+            grok_key = st.text_input("Grok API Key", value=get_setting("GROK_API_KEY"), type="password")
 
             if st.form_submit_button("💾 Save AI Settings"):
-                set_setting("QWEN_API_KEY", qwen_key)
-                set_setting("GROK_API_KEY", grok_key)
+                set_setting("OPENAI_EMBEDDING_KEY", openai_embed_key)
                 set_setting("DEEPSEEK_API_KEY", deepseek_key)
+                set_setting("QWEN_API_KEY", qwen_key)
                 set_setting("GEMINI_API_KEY", gemini_key)
                 set_setting("OPENAI_API_KEY", openai_key)
                 set_setting("ANTHROPIC_API_KEY", anthropic_key)
-                set_setting("GEMINI_EMBEDDING_KEY", gemini_embed_key)
-                set_setting("SERPER_API_KEY", serper_key)
-
+                set_setting("GROK_API_KEY", grok_key)
                 show_toast("AI settings saved")
                 st.rerun()
 
+        st.divider()
+        st.markdown("##### ✅ Currently active, by role")
+        for role_label, role_key in [
+            ("Document Q&A", "doc_qa"),
+            ("Deep Search", "deep_search"),
+            ("Summarization", "summarize"),
+        ]:
+            active = ai_system.get_providers(role=role_key)
+            st.write(f"**{role_label}**: {', '.join([p['name'] for p in active]) or '❌ none configured'}")
     # ------------------------------------------------------------
     # AI TRAINING
     # ------------------------------------------------------------
