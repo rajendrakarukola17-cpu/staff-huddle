@@ -2490,6 +2490,7 @@ def show_documents():
 
 
 def show_ai():
+    """AI Assistant with graceful fallback."""
     st.markdown("### 🤖 AI Assistant")
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -2507,6 +2508,7 @@ def show_ai():
             src = search_documents(p, 4)
             web = ""
             role = "doc_qa"
+
             if src:
                 ctx = (
                     "Answer using ONLY the document context below. "
@@ -2528,11 +2530,38 @@ def show_ai():
             history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-6:]])
             prompt = f"{ctx}\n\nRecent conversation:\n{history}\n\nQuestion: {p}"
 
-            r = ai_system.request(prompt, role=role)
-            resp = r.get("response") if r.get("success") else f"❌ AI Error: {r.get('error', 'Unknown')}"
-            st.markdown(resp)
-            st.session_state.messages.append({"role": "assistant", "content": resp})
-
+            # Try AI, but have a fallback
+            with st.spinner("Thinking..."):
+                r = ai_system.request(prompt, role=role)
+            
+            if r.get("success") and r.get("response"):
+                resp = r["response"]
+                st.markdown(resp)
+                st.session_state.messages.append({"role": "assistant", "content": resp})
+            else:
+                # AI failed - provide fallback response
+                error_msg = r.get('error', 'AI service unavailable')
+                st.warning(f"⚠️ AI service issue: {error_msg}")
+                
+                # Create a helpful fallback response
+                fallback = ""
+                if src:
+                    fallback = "📄 **Based on your documents, I found:**\n\n"
+                    for s in src[:3]:
+                        fallback += f"- **{s.get('filename', 'Document')}**: {s.get('ai_summary', 'No summary available')}\n"
+                    fallback += "\n*AI summarization is currently unavailable. Please review these documents manually.*"
+                elif web.strip():
+                    fallback = "🌐 **Web search results found:**\n\n"
+                    lines = web.split('\n')
+                    for line in lines[:6]:
+                        if line.strip():
+                            fallback += f"{line}\n"
+                    fallback += "\n*AI analysis is currently unavailable. Please review these sources manually.*"
+                else:
+                    fallback = "❓ I couldn't find relevant information in your documents or on the web. Please try rephrasing your question or check if AI API keys are configured in Admin Panel → AI Settings."
+                
+                st.markdown(fallback)
+                st.session_state.messages.append({"role": "assistant", "content": fallback})
 
 def show_messages():
     """Real messaging with Inbox/Sent/Compose."""
