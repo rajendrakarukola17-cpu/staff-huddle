@@ -3493,23 +3493,11 @@ def show_admin():
 # SIDEBAR NAVIGATION — SIDEBAR RETRACT FIX
 # ============================================================
 def render_sidebar_nav():
-    if "sidebar_open" not in st.session_state:
-        st.session_state.sidebar_open = True
-
-    # If sidebar is closed, show open button in main area
-    if not st.session_state.sidebar_open:
-        c1, _ = st.columns([1, 6])
-
-        with c1:
-            if st.button("☰ Open Sidebar", use_container_width=True, key="open_sidebar_main"):
-                st.session_state.sidebar_open = True
-                st.rerun()
-
-        return
-
+    """Always render the sidebar with navigation."""
     with st.sidebar:
         u = st.session_state.user or {}
 
+        # User info header
         st.markdown(
             f"""
             <div style="background: linear-gradient(135deg, #0A66C2 0%, #004182 100%); padding: 16px; border-radius: 12px; color: white; margin-bottom: 20px;">
@@ -3521,24 +3509,14 @@ def render_sidebar_nav():
             unsafe_allow_html=True,
         )
 
+        # Navigation items
         menu_items = [
-            "Feed",
-            "Workspace",
-            "Tapal",
-            "Dispatch",
-            "Documents",
-            "Messages",
-            "AI Assistant",
+            "Feed", "Workspace", "Tapal", "Dispatch",
+            "Documents", "Messages", "AI Assistant"
         ]
-
         menu_icons = [
-            "house",
-            "briefcase",
-            "envelope-paper",
-            "send",
-            "file-earmark-text",
-            "chat",
-            "robot",
+            "house", "briefcase", "envelope-paper", "send",
+            "file-earmark-text", "chat", "robot"
         ]
 
         if u.get("admin_level") in ["system_admin", "office_admin"]:
@@ -3556,19 +3534,18 @@ def render_sidebar_nav():
             "Admin Panel": "admin",
         }
 
+        # Determine current page index
         inverse_map = {v: k for k, v in page_map.items()}
         current_page = st.session_state.get("page", "feed")
-
         default_index = 0
-
         if current_page in inverse_map:
             try:
                 default_index = menu_items.index(inverse_map[current_page])
-            except Exception:
+            except ValueError:
                 default_index = 0
 
-        selected = menu_items[default_index]
-
+        # Render menu (option_menu if available, otherwise radio)
+        selected = None
         if OPTION_MENU_LIB and option_menu:
             try:
                 selected = option_menu(
@@ -3594,21 +3571,18 @@ def render_sidebar_nav():
                     },
                 )
             except Exception:
-                selected = st.radio("Navigation", menu_items, index=default_index)
-        else:
+                selected = None
+
+        if selected is None:
             selected = st.radio("Navigation", menu_items, index=default_index)
 
+        # Logout button
         st.divider()
-
-        if st.button("⬅️ Hide Sidebar", use_container_width=True, key="hide_sidebar_nav"):
-            st.session_state.sidebar_open = False
-            st.rerun()
-
         if st.button("🚪 Logout", use_container_width=True, type="secondary", key="logout_nav"):
             logout()
 
+    # Update page state based on selection
     st.session_state.page = page_map.get(selected, "feed")
-
 
 # ============================================================
 # MAIN ENTRY POINT — BUG FIX: __name__ == "__main__"
