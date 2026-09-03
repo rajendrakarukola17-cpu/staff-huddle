@@ -2272,8 +2272,11 @@ def show_dispatch():
         to = st.text_area("To", height=80)
         subj = st.text_input("Subject")
 
-        submitted = st.form_submit_button("🖨️ Generate Label")
-        if submitted and seq:
+                submitted = st.form_submit_button("🖨️ Generate Label")
+        if submitted:
+            if not seq or not to.strip() or not subj.strip():
+                show_toast("Seq No., To, and Subject are required", "warning")
+            else:
             safe_to, safe_frm, safe_subj = html.escape(to), html.escape(frm), html.escape(subj)
             seat = u.get("seat_number") or (u.get("designation", "JA")[:3] if u.get("designation") else "JA")
             dno = f"Dispatch/{u.get('section', 'A')}/{seat}/{now_utc().year}/{seq}"
