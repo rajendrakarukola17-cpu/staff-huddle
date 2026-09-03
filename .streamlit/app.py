@@ -641,29 +641,25 @@ class StorageSystem:
         self.hot_bucket = secret("R2_BUCKET_NAME", "rta-hot-storage")
         self.cold_bucket = secret("B2_BUCKET_NAME", "rta-cold-storage")
 
-        def _upload_to_storage(self, data: bytes, key: str, target_tier: str) -> Optional[str]:
+    def _upload_to_storage(self, data: bytes, key: str, target_tier: str) -> Optional[str]:
         if target_tier == "cold" and self.b2:
             try:
                 self.b2.put_object(Bucket=self.cold_bucket, Key=key, Body=data)
                 return "cold"
             except Exception as e:
                 logger.warning(f"B2 cold upload failed: {e}")
-
         if target_tier == "hot" and self.r2:
             try:
                 self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data)
                 return "hot"
             except Exception as e:
                 logger.warning(f"R2 hot upload failed: {e}")
-
         if self.r2:
             try:
                 self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data)
                 return "hot"
             except Exception:
                 pass
-
-        # NEW: Supabase Storage fallback
         sb = globals().get("supabase")
         if sb:
             try:
@@ -675,22 +671,19 @@ class StorageSystem:
                 return "supabase"
             except Exception as e:
                 logger.warning(f"Supabase Storage upload failed: {e}")
-
         return None
 
-        def _download_from_storage(self, key: str, tier: str) -> Optional[bytes]:
+    def _download_from_storage(self, key: str, tier: str) -> Optional[bytes]:
         if tier == "hot" and self.r2:
             try:
                 return self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
-
         if tier == "cold" and self.b2:
             try:
                 return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
-
         if tier == "supabase":
             sb = globals().get("supabase")
             if sb:
@@ -698,44 +691,34 @@ class StorageSystem:
                     return sb.storage.from_(self.hot_bucket).download(key)
                 except Exception:
                     pass
-
         if self.r2:
             try:
                 return self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
-
         if self.b2:
             try:
                 return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
-
         sb = globals().get("supabase")
         if sb:
             try:
                 return sb.storage.from_(self.hot_bucket).download(key)
             except Exception:
                 pass
-
         return None
 
-        def get_presigned_url(self, key: str, tier: str, expiration: int = 3600):
+    def get_presigned_url(self, key: str, tier: str, expiration: int = 3600):
         try:
             if tier == "hot" and self.r2:
                 return self.r2.generate_presigned_url(
-                    "get_object",
-                    Params={"Bucket": self.hot_bucket, "Key": key},
-                    ExpiresIn=expiration,
+                    "get_object", Params={"Bucket": self.hot_bucket, "Key": key}, ExpiresIn=expiration,
                 )
-
             if tier == "cold" and self.b2:
                 return self.b2.generate_presigned_url(
-                    "get_object",
-                    Params={"Bucket": self.cold_bucket, "Key": key},
-                    ExpiresIn=expiration,
+                    "get_object", Params={"Bucket": self.cold_bucket, "Key": key}, ExpiresIn=expiration,
                 )
-
             if tier == "supabase":
                 sb = globals().get("supabase")
                 if sb:
@@ -743,9 +726,7 @@ class StorageSystem:
                     return res.get("signedURL")
         except Exception:
             pass
-
         return None
-
     def _extract_text(self, file_data: bytes, filename: str) -> str:
         ext = filename.lower().split(".")[-1] if "." in filename else ""
         if ext == "pdf" and PDF_AVAILABLE:
