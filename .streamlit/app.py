@@ -3005,12 +3005,12 @@ def show_admin():
                             )
 
                     with col4:
-                            grok_key = st.text_input(
-                                "Grok (xAI) API Key",
-                                value=get_setting("GROK_API_KEY"),
+                            groq_key = st.text_input(
+                                "Groq API Key",
+                                value=get_setting("GROQ_API_KEY"),
                                 type="password",
-                                placeholder="xai-...",
-                                help="Optional backup provider"
+                                placeholder="gsk_...",
+                                help="Fast free-tier provider (Llama/Mixtral models)"
                             )
 
                     st.divider()
