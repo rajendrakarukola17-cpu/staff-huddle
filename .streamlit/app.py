@@ -3207,19 +3207,19 @@ def show_admin():
 
                 submitted = st.form_submit_button("💾 Save All API Keys", use_container_width=True)
 
-                if submitted:
-                    # Save all keys
-                    set_setting("DEEPSEEK_API_KEY", deepseek_key.strip())
-                    set_setting("QWEN_API_KEY", qwen_key.strip())
-                    set_setting("OPENAI_API_KEY", openai_key.strip())
-                    set_setting("GEMINI_API_KEY", gemini_key.strip())
-                    set_setting("ANTHROPIC_API_KEY", anthropic_key.strip())
-                    set_setting("GROK_API_KEY", grok_key.strip())
-                    set_setting("SERPER_API_KEY", serper_key.strip())
-                    set_setting("OPENAI_EMBEDDING_KEY", embedding_key.strip())
-
-                    show_toast("✅ API keys saved successfully!")
-                    st.rerun()
+               if submitted:
+    # Save all keys
+    set_setting("DEEPSEEK_API_KEY", deepseek_key.strip())
+    set_setting("QWEN_API_KEY", qwen_key.strip())
+    set_setting("OPENAI_API_KEY", openai_key.strip())
+    set_setting("GEMINI_API_KEY", gemini_key.strip())
+    set_setting("ANTHROPIC_API_KEY", anthropic_key.strip())
+    set_setting("GROK_API_KEY", grok_key.strip())
+    set_setting("SERPER_API_KEY", serper_key.strip())
+    set_setting("OPENAI_EMBEDDING_KEY", embedding_key.strip())
+    
+    show_toast("✅ API keys saved successfully!")
+    st.rerun()
 
             # Quick links to get keys
             with st.expander("🔗 Where to get free API keys?"):
