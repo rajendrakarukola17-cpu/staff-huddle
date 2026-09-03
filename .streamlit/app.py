@@ -876,7 +876,7 @@ class StorageSystem:
             log_error("upload_failed", e)
             return {"success": False, "error": str(e)}
 
-    def download_document(self, document_id: str):
+       def download_document(self, document_id: str):
         try:
             if not supabase:
                 return None
@@ -899,7 +899,7 @@ class StorageSystem:
                 pass
             business_metrics.increment("documents_downloaded")
             return decompress_data(decrypt_data(data), doc.get("compression_method", "none"))
-    except Exception:
+        except Exception:
             return None
 
     def get_full_text(self, document_id: str) -> str:
@@ -920,7 +920,6 @@ class StorageSystem:
             return ""
         except Exception:
             return ""
-
 
 storage_system = StorageSystem()
 
