@@ -1210,9 +1210,9 @@ class MultiAI:
         except Exception as e:
             logger.warning(f"Qwen call failed: {e}")
             raise
-        return None
+           return None
 
-     def _call_groq(self, prompt, key):
+    def _call_groq(self, prompt, key):
         """Call Groq API (fast, generous free tier, Llama/Mixtral models)."""
         try:
             r = requests.post(
