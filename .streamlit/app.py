@@ -1212,24 +1212,24 @@ class MultiAI:
             raise
         return None
 
-   def _call_groq(self, prompt, key):
-    """Call Groq API (fast, generous free tier, Llama/Mixtral models)."""
-    try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}]},
-            timeout=20,
-        )
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
-        if r.status_code == 429:
-            raise Exception("Rate limited")
-        logger.warning(f"Groq API error: {r.status_code} - {r.text[:100]}")
-    except Exception as e:
-        logger.warning(f"Groq call failed: {e}")
-        raise
-    return None
+     def _call_groq(self, prompt, key):
+        """Call Groq API (fast, generous free tier, Llama/Mixtral models)."""
+        try:
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}]},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            if r.status_code == 429:
+                raise Exception("Rate limited")
+            logger.warning(f"Groq API error: {r.status_code} - {r.text[:100]}")
+        except Exception as e:
+            logger.warning(f"Groq call failed: {e}")
+            raise
+        return None
 
     def _call_deepseek(self, prompt, key):
         """Call DeepSeek API."""
