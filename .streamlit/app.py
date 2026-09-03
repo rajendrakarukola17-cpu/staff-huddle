@@ -1173,7 +1173,7 @@ class MultiAI:
             {"name": "Gemini", "key": self._get_key("GEMINI_API_KEY")},
             {"name": "OpenAI", "key": self._get_key("OPENAI_API_KEY")},
             {"name": "Anthropic", "key": self._get_key("ANTHROPIC_API_KEY")},
-            {"name": "Grok", "key": self._get_key("GROK_API_KEY")},
+            {"name": "Groq", "key": self._get_key("GROQ_API_KEY")},
         ]
         providers.extend([p for p in backups if p["key"]])
         
