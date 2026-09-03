@@ -720,7 +720,7 @@ class StorageSystem:
 
         return None
 
-    def get_presigned_url(self, key: str, tier: str, expiration: int = 3600):
+        def get_presigned_url(self, key: str, tier: str, expiration: int = 3600):
         try:
             if tier == "hot" and self.r2:
                 return self.r2.generate_presigned_url(
@@ -728,14 +728,22 @@ class StorageSystem:
                     Params={"Bucket": self.hot_bucket, "Key": key},
                     ExpiresIn=expiration,
                 )
+
             if tier == "cold" and self.b2:
                 return self.b2.generate_presigned_url(
                     "get_object",
                     Params={"Bucket": self.cold_bucket, "Key": key},
                     ExpiresIn=expiration,
                 )
+
+            if tier == "supabase":
+                sb = globals().get("supabase")
+                if sb:
+                    res = sb.storage.from_(self.hot_bucket).create_signed_url(key, expiration)
+                    return res.get("signedURL")
         except Exception:
             pass
+
         return None
 
     def _extract_text(self, file_data: bytes, filename: str) -> str:
