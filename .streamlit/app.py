@@ -3036,8 +3036,7 @@ def show_admin():
                             )
 
                     submitted = st.form_submit_button("💾 Save All API Keys", use_container_width=True)
-
-                                   if submitted:
+                    if submitted:
                     saves = {
                         "DEEPSEEK_API_KEY": deepseek_key.strip(),
                         "QWEN_API_KEY": qwen_key.strip(),
