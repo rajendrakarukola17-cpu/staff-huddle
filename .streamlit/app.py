@@ -777,26 +777,36 @@ class StorageSystem:
 
         return None
 
-    def _extract_text(self, file_data: bytes, filename: str) -> str:
+ def _extract_text(self, file_data: bytes, filename: str) -> str:
         ext = filename.lower().split(".")[-1] if "." in filename else ""
+        text = ""
+        
         if ext == "pdf" and PDF_AVAILABLE:
             try:
                 reader = pypdf.PdfReader(io.BytesIO(file_data))
                 text = "".join([(p.extract_text() or "") + "\n" for p in reader.pages])
-                if text.strip():
-                    return text
-            except Exception:
-                pass
-        if ext in ["jpg", "jpeg", "png", "bmp", "tiff"] and OCR_AVAILABLE:
+                
+                # BUG FIX: Fallback to OCR if PDF is just scanned images (no text found)
+                if len(text.strip()) < 50 and PDF2IMAGE_AVAILABLE and OCR_AVAILABLE:
+                    images = convert_from_bytes(file_data, dpi=150) # Keep DPI moderate for memory
+                    for img in images:
+                        gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+                        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+                        text += pytesseract.image_to_string(thresh) + "\n"
+                        
+            except Exception as e:
+                logger.warning(f"PDF extraction failed: {e}")
+                
+        elif ext in ["jpg", "jpeg", "png", "bmp", "tiff"] and OCR_AVAILABLE:
             try:
                 img = Image.open(io.BytesIO(file_data)).convert("RGB")
                 gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
                 _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-                return pytesseract.image_to_string(thresh)
-            except Exception:
-                pass
-        return ""
-
+                text = pytesseract.image_to_string(thresh)
+            except Exception as e:
+                logger.warning(f"Image OCR failed: {e}")
+                
+        return text.strip()
     def upload_document(self, file_data: bytes, filename: str, doc_type: str, user_email: str):
         try:
             if not file_data:
