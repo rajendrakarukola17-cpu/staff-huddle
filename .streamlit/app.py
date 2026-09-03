@@ -933,9 +933,9 @@ class StorageSystem:
                     method = "lzma"
                 elif key.endswith(".zstd"):
                     method = "zstd"
-                if self.r2:
-                    raw = self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
-                    return decompress_data(raw, method).decode("utf-8", "ignore")
+                            raw = self._download_from_storage(key, "supabase")
+            if raw:
+                return decompress_data(raw, method).decode("utf-8", "ignore")
             return ""
         except Exception:
             return ""
