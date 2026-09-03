@@ -777,7 +777,7 @@ class StorageSystem:
 
         return None
 
- def _extract_text(self, file_data: bytes, filename: str) -> str:
+    def _extract_text(self, file_data: bytes, filename: str) -> str:
         ext = filename.lower().split(".")[-1] if "." in filename else ""
         text = ""
         
