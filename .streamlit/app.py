@@ -1288,11 +1288,10 @@ class MultiAI:
                 return r.json()["choices"][0]["message"]["content"].strip()
             if r.status_code == 429:
                 raise Exception("Rate limited")
-            logger.warning(f"OpenAI API error: {r.status_code} - {r.text[:100]}")
-        except Exception as e:
-            logger.warning(f"OpenAI call failed: {e}")
-            raise
-        return None
+                   raise Exception(f"HTTP {r.status_code}: {r.text[:100]}")
+    except Exception as e:
+        logger.warning(f"OpenAI call failed: {e}")
+        raise
 
     def _call_anthropic(self, prompt, key):
         """Call Anthropic API."""
