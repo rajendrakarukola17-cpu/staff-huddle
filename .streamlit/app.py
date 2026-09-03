@@ -3037,22 +3037,22 @@ def show_admin():
 
                     submitted = st.form_submit_button("💾 Save All API Keys", use_container_width=True)
                     if submitted:
-                    saves = {
-                        "DEEPSEEK_API_KEY": deepseek_key.strip(),
-                        "QWEN_API_KEY": qwen_key.strip(),
-                        "OPENAI_API_KEY": openai_key.strip(),
-                        "GEMINI_API_KEY": gemini_key.strip(),
-                        "ANTHROPIC_API_KEY": anthropic_key.strip(),
-                        "GROQ_API_KEY": groq_key.strip(),
-                        "SERPER_API_KEY": serper_key.strip(),
-                        "OPENAI_EMBEDDING_KEY": embedding_key.strip(),
-                    }
-                    failed = [k for k, v in saves.items() if not set_setting(k, v)]
-                    if failed:
-                        show_toast(f"⚠️ Saved locally but FAILED to persist to database: {', '.join(failed)}", "error")
-                    else:
-                        show_toast("✅ API keys saved to database — will survive logout")
-                    st.rerun()
+                                            saves = {
+                            "DEEPSEEK_API_KEY": deepseek_key.strip(),
+                            "QWEN_API_KEY": qwen_key.strip(),
+                            "OPENAI_API_KEY": openai_key.strip(),
+                            "GEMINI_API_KEY": gemini_key.strip(),
+                            "ANTHROPIC_API_KEY": anthropic_key.strip(),
+                            "GROQ_API_KEY": groq_key.strip(),
+                            "SERPER_API_KEY": serper_key.strip(),
+                            "OPENAI_EMBEDDING_KEY": embedding_key.strip(),
+                        }
+                        failed = [k for k, v in saves.items() if not set_setting(k, v)]
+                        if failed:
+                            show_toast(f"⚠️ Saved locally but FAILED to persist to database: {', '.join(failed)}", "error")
+                        else:
+                            show_toast("✅ API keys saved to database — will survive logout")
+                        st.rerun()
                 with st.expander("🔗 Where to get free API keys?"):
                     st.markdown("""
                     | Provider | Free Tier | Sign Up Link |
