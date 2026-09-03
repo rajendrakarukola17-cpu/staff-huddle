@@ -1131,7 +1131,7 @@ def audit_log(email, action, rtype, rid=None, meta=None):
 # MULTI-PROVIDER AI SYSTEM (Serial Fallback — 6 Providers)
 # ============================================================
 qwen_breaker = CircuitBreaker("qwen")
-grok_breaker = CircuitBreaker("grok")
+groq_breaker = CircuitBreaker("groq")
 deepseek_breaker = CircuitBreaker("deepseek")
 gemini_breaker = CircuitBreaker("gemini")
 openai_breaker = CircuitBreaker("openai")
