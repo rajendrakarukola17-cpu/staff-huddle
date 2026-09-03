@@ -678,28 +678,46 @@ class StorageSystem:
 
         return None
 
-    def _download_from_storage(self, key: str, tier: str) -> Optional[bytes]:
+        def _download_from_storage(self, key: str, tier: str) -> Optional[bytes]:
         if tier == "hot" and self.r2:
             try:
                 return self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
+
         if tier == "cold" and self.b2:
             try:
                 return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
-        # Try both as fallback
+
+        if tier == "supabase":
+            sb = globals().get("supabase")
+            if sb:
+                try:
+                    return sb.storage.from_(self.hot_bucket).download(key)
+                except Exception:
+                    pass
+
         if self.r2:
             try:
                 return self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
+
         if self.b2:
             try:
                 return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
+
+        sb = globals().get("supabase")
+        if sb:
+            try:
+                return sb.storage.from_(self.hot_bucket).download(key)
+            except Exception:
+                pass
+
         return None
 
     def get_presigned_url(self, key: str, tier: str, expiration: int = 3600):
