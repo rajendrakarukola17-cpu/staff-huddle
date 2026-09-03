@@ -2406,12 +2406,18 @@ def document_card(doc):
         if presigned:
             st.markdown(f"[⬇️ Download]({presigned})")
         else:
-            if st.button("Download", key=f"dl_{doc_id}"):
-                data = storage_system.download_document(doc_id)
-                if data:
-                    st.download_button("Save", data, file_name=doc.get("filename", "file"), key=f"sv_{doc_id}")
-                else:
-                    st.error("Unable to download file.")
+if st.button("Download", key=f"dl_{doc_id}"):
+    with st.spinner("Decompressing securely..."):
+        file_data = storage_system.download_document(doc_id)
+        if file_data:
+            st.download_button(
+                label="Save to Device",
+                data=file_data, # Streamlit automatically handles bytes efficiently here
+                file_name=doc.get("filename", "file"),
+                key=f"sv_{doc_id}"
+            )
+        else:
+            st.error("Unable to download file.")
 
 
 def show_documents():
