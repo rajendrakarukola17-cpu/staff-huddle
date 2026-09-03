@@ -1291,104 +1291,59 @@ ai_system = MultiAI()
 # AGENTIC WEB SEARCH
 # ============================================================
 def agentic_web_search(query, stype="gov"):
-    """Search the web using Serper API."""
+    """Search the web using Serper API or DuckDuckGo fallback."""
+    # Try Serper API first
     key = get_setting("SERPER_API_KEY") or secret("SERPER_API_KEY")
-    if not key:
-        return ""
-    if stype == "gov":
-        query = f"{query} site:ap.gov.in OR site:gov.in"
-    try:
-        r = requests.post(
-            "https://google.serper.dev/search",
-            headers={"X-API-KEY": key, "Content-Type": "application/json"},
-            json={"q": query, "num": 5},
-            timeout=10,
-        )
-        return "\n".join([
-            f"Source: {x.get('link')}\nSnippet: {x.get('snippet')}\n"
-            for x in r.json().get("organic", [])
-        ])
-    except Exception:
-        return ""
-
-
-# ============================================================
-# VECTOR EMBEDDINGS & SEARCH (BUG FIX: fuzzy search tuple fix)
-# ============================================================
-def generate_embedding(text):
-    """Generate 384-dimensional vector for Qdrant using OpenAI embeddings."""
-    dim = 384
-    text = str(text or "")[:1500]
-    key = (
-        get_setting("OPENAI_EMBEDDING_KEY")
-        or get_setting("OPENAI_API_KEY")
-        or secret("OPENAI_EMBEDDING_KEY")
-        or secret("OPENAI_API_KEY")
-    )
     if key:
+        if stype == "gov":
+            query = f"{query} site:ap.gov.in OR site:gov.in"
         try:
             r = requests.post(
-                "https://api.openai.com/v1/embeddings",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": "text-embedding-3-small", "input": text, "dimensions": dim},
+                "https://google.serper.dev/search",
+                headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                json={"q": query, "num": 5},
                 timeout=10,
             )
             if r.status_code == 200:
-                v = r.json()["data"][0]["embedding"]
-                return v[:dim] + [0.0] * (dim - len(v))
+                results = r.json().get("organic", [])
+                if results:
+                    return "\n".join([
+                        f"Source: {x.get('link')}\nSnippet: {x.get('snippet')}\n"
+                        for x in results
+                    ])
         except Exception as e:
-            logger.warning(f"OpenAI embedding failed: {e}")
-    # Fallback: deterministic hash-based embedding (free, lower quality, keeps app working if key is missing)
-    words = text.lower().split()
-    v = np.zeros(dim)
-    for w in words:
-        v[int(hashlib.md5(w.encode()).hexdigest()[:8], 16) % dim] += 1
-    n = np.linalg.norm(v)
-    return (v / n if n > 0 else v).tolist()
-
-def search_documents(query, limit=10):
-    """Hybrid search: Fuzzy -> Vector -> SQL."""
-    # 1. Fuzzy Search (BUG FIX: use dict to get index back)
-    if FUZZY_AVAILABLE and supabase:
-        try:
-            docs = supabase.table("documents").select(
-                "id, filename, file_key, storage_tier, doc_type, ai_summary, uploaded_at"
-            ).limit(200).execute().data or []
-            if docs:
-                choices = {i: str(d.get("filename", "")) for i, d in enumerate(docs)}
-                matches = process.extract(query, choices, scorer=fuzz.token_sort_ratio, limit=limit)
-                ids = [docs[idx].get("id") for _, score, idx in matches if score >= 60]
-                if ids:
-                    return [d for d in docs if d.get("id") in ids]
-        except Exception:
-            pass
-
-    # 2. Vector Search
-    if qdrant_client:
-        try:
-            hits = qdrant_client.search(
-                collection_name="rta_documents",
-                query_vector=generate_embedding(query),
-                limit=limit,
-            )
-            ids = [h.payload.get("doc_id") for h in hits if h.payload]
-            if ids and supabase:
-                return supabase.table("documents").select(
-                    "id, filename, file_key, storage_tier, doc_type, ai_summary, uploaded_at"
-                ).in_("id", ids).execute().data or []
-        except Exception:
-            pass
-
-    # 3. SQL Fallback
-    q = sanitize_search_query(query)
-    if q and supabase:
-        try:
-            return supabase.table("documents").select(
-                "id, filename, file_key, storage_tier, doc_type, ai_summary, uploaded_at"
-            ).ilike("filename", f"%{q}%").limit(limit).execute().data or []
-        except Exception:
-            pass
-    return []
+            logger.warning(f"Serper search failed: {e}")
+    
+    # Fallback to DuckDuckGo Lite (no JavaScript, simpler HTML)
+    try:
+        ddg_query = query
+        if stype == "gov":
+            ddg_query = f"{query} site:gov.in"
+        
+        r = requests.get(
+            "https://lite.duckduckgo.com/lite/",
+            params={"q": ddg_query},
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        if r.status_code == 200:
+            # Simple regex-based extraction
+            import re
+            results = []
+            links = re.findall(r'<a rel="nofollow" href="([^"]+)"[^>]*>(.*?)</a>', r.text)
+            snippets = re.findall(r'<td class="result-snippet">(.*?)</td>', r.text, re.DOTALL)
+            
+            for i, (link, title) in enumerate(links[:5]):
+                snippet = snippets[i] if i < len(snippets) else ""
+                snippet = re.sub(r'<[^>]+>', '', snippet).strip()
+                results.append(f"Source: {link}\nSnippet: {snippet[:200]}\n")
+            
+            if results:
+                return "\n".join(results)
+    except Exception as e:
+        logger.warning(f"DuckDuckGo search failed: {e}")
+    
+    return ""
 
 
 # ============================================================
