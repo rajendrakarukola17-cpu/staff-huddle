@@ -902,7 +902,7 @@ class StorageSystem:
         except Exception:
             return None
 
-    def get_full_text(self, document_id: str) -> str:
+        def get_full_text(self, document_id: str) -> str:
         try:
             if not supabase:
                 return ""
@@ -914,9 +914,9 @@ class StorageSystem:
                     method = "lzma"
                 elif key.endswith(".zstd"):
                     method = "zstd"
-                            raw = self._download_from_storage(key, "supabase")
-            if raw:
-                return decompress_data(raw, method).decode("utf-8", "ignore")
+                raw = self._download_from_storage(key, "hot")   # fixed indent + fixed tier ("hot", since that's where text is actually written)
+                if raw:
+                    return decompress_data(raw, method).decode("utf-8", "ignore")
             return ""
         except Exception:
             return ""
