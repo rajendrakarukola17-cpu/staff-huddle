@@ -1143,9 +1143,9 @@ class MultiAI:
                 )
                 if r.status_code == 200:
                     return r.json()["choices"][0]["message"]["content"].strip()
-                if r.status_code == 429:
-                    raise Exception("Rate limited")
-                            raise Exception(f"HTTP {r.status_code}: {r.text[:100]}")
+                       if r.status_code == 429:
+            raise Exception("Rate limited")
+                              raise Exception(f"HTTP {r.status_code}: {r.text[:100]}")
     except Exception as e:
             logger.warning(f"Qwen call failed: {e}")
             raise
