@@ -1029,7 +1029,6 @@ class MultiAI:
     """Handles AI requests with circuit breakers, semantic caching, and serial fallback."""
 
     def _get_key(self, setting_name, secret_name=None):
-        """Read API key from Admin Panel settings OR secrets.toml."""
         key = get_setting(setting_name)
         if key:
             return key.strip()
@@ -1037,12 +1036,46 @@ class MultiAI:
             return secret(secret_name).strip()
         return ""
 
-        def request(self, prompt, role="chat"):
+    def get_providers(self, role="chat"):
+        """Return list of providers for the given role with their API keys."""
+        providers = []
+        # Embedding handled separately (not part of chat providers)
+        if role == "doc_qa":
+            providers.append({"name": "DeepSeek", "key": self._get_key("DEEPSEEK_API_KEY")})
+            providers.append({"name": "Qwen", "key": self._get_key("QWEN_API_KEY")})
+        elif role == "deep_search":
+            providers.append({"name": "Qwen", "key": self._get_key("QWEN_API_KEY")})
+            providers.append({"name": "DeepSeek", "key": self._get_key("DEEPSEEK_API_KEY")})
+        elif role == "summarize":
+            providers.append({"name": "DeepSeek", "key": self._get_key("DEEPSEEK_API_KEY")})
+            providers.append({"name": "Qwen", "key": self._get_key("QWEN_API_KEY")})
+        else:  # default chat
+            providers.append({"name": "Qwen", "key": self._get_key("QWEN_API_KEY")})
+            providers.append({"name": "DeepSeek", "key": self._get_key("DEEPSEEK_API_KEY")})
+
+        # Backup providers (always appended at the end)
+        backups = [
+            {"name": "Gemini", "key": self._get_key("GEMINI_API_KEY")},
+            {"name": "OpenAI", "key": self._get_key("OPENAI_API_KEY")},
+            {"name": "Anthropic", "key": self._get_key("ANTHROPIC_API_KEY")},
+            {"name": "Grok", "key": self._get_key("GROK_API_KEY")},
+        ]
+        providers.extend([p for p in backups if p["key"]])
+        # Remove duplicates and empty keys
+        seen = set()
+        final = []
+        for p in providers:
+            if p["key"] and p["name"] not in seen:
+                seen.add(p["name"])
+                final.append(p)
+        return final
+
+    def request(self, prompt, role="chat"):
         """Execute AI request with serial fallback across providers for the given role."""
         business_metrics.increment("ai_queries_total")
         h = hashlib.md5(f"{role}:{prompt}".encode()).hexdigest()
 
-        # 1. Exact Match Cache (Redis) — unchanged, just uses the role-aware hash now
+        # 1. Exact Match Cache (Redis)
         if redis_client:
             try:
                 c = redis_client.get(f"ai_cache:{h}")
@@ -1052,7 +1085,7 @@ class MultiAI:
             except Exception:
                 pass
 
-        # 2. Semantic Cache (Qdrant) — unchanged
+        # 2. Semantic Cache (Qdrant)
         if qdrant_client:
             try:
                 hits = qdrant_client.search(
@@ -1067,7 +1100,7 @@ class MultiAI:
             except Exception:
                 pass
 
-        # 3. Serial Provider Fallback — now role-aware
+        # 3. Serial Provider Fallback
         providers = self.get_providers(role=role)
         if not providers:
             return {"success": False, "error": f"No API keys configured for role '{role}'. Go to Admin Panel → AI Settings."}
@@ -1090,6 +1123,7 @@ class MultiAI:
                     resp = anthropic_breaker.call(self._call_anthropic, prompt, p["key"])
 
                 if resp:
+                    # Cache successful response
                     if redis_client:
                         try:
                             redis_client.setex(f"ai_cache:{h}", 86400, json.dumps(resp))
@@ -1118,6 +1152,8 @@ class MultiAI:
         r = self.request(f"Summarize this in 2-3 sentences: {text[:3000]}", role="summarize")
         return r.get("response") if r.get("success") else None
 
+    # Keep all _call_* methods as they are (ensure proper indentation)
+    
     def _call_grok(self, prompt, key):
         try:
             r = requests.post(
