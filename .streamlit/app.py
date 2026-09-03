@@ -286,6 +286,7 @@ def set_setting(key: str, value: str) -> bool:
             return True
     except Exception as e:
             logger.error(f"Failed to save setting {key}: {e}")
+            st.session_state["_last_setting_error"] = str(e)
             return False
 
 def sanitize_input(text: str) -> str:
@@ -3049,6 +3050,7 @@ def show_admin():
                         }
                         failed = [k for k, v in saves.items() if not set_setting(k, v)]
                         if failed:
+                            err = st.session_state.get("_last_setting_error", "unknown error")
                             show_toast(f"⚠️ Saved locally but FAILED to persist to database: {', '.join(failed)}", "error")
                         else:
                             show_toast("✅ API keys saved to database — will survive logout")
