@@ -648,18 +648,21 @@ class StorageSystem:
                 return "cold"
             except Exception as e:
                 logger.warning(f"B2 cold upload failed: {e}")
+
         if target_tier == "hot" and self.r2:
             try:
                 self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data)
                 return "hot"
             except Exception as e:
                 logger.warning(f"R2 hot upload failed: {e}")
+
         if self.r2:
             try:
                 self.r2.put_object(Bucket=self.hot_bucket, Key=key, Body=data)
                 return "hot"
             except Exception:
                 pass
+
         sb = globals().get("supabase")
         if sb:
             try:
@@ -671,6 +674,7 @@ class StorageSystem:
                 return "supabase"
             except Exception as e:
                 logger.warning(f"Supabase Storage upload failed: {e}")
+
         return None
 
     def _download_from_storage(self, key: str, tier: str) -> Optional[bytes]:
@@ -679,11 +683,13 @@ class StorageSystem:
                 return self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
+
         if tier == "cold" and self.b2:
             try:
                 return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
+
         if tier == "supabase":
             sb = globals().get("supabase")
             if sb:
@@ -691,34 +697,44 @@ class StorageSystem:
                     return sb.storage.from_(self.hot_bucket).download(key)
                 except Exception:
                     pass
+
         if self.r2:
             try:
                 return self.r2.get_object(Bucket=self.hot_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
+
         if self.b2:
             try:
                 return self.b2.get_object(Bucket=self.cold_bucket, Key=key)["Body"].read()
             except Exception:
                 pass
+
         sb = globals().get("supabase")
         if sb:
             try:
                 return sb.storage.from_(self.hot_bucket).download(key)
             except Exception:
                 pass
+
         return None
 
     def get_presigned_url(self, key: str, tier: str, expiration: int = 3600):
         try:
             if tier == "hot" and self.r2:
                 return self.r2.generate_presigned_url(
-                    "get_object", Params={"Bucket": self.hot_bucket, "Key": key}, ExpiresIn=expiration,
+                    "get_object",
+                    Params={"Bucket": self.hot_bucket, "Key": key},
+                    ExpiresIn=expiration,
                 )
+
             if tier == "cold" and self.b2:
                 return self.b2.generate_presigned_url(
-                    "get_object", Params={"Bucket": self.cold_bucket, "Key": key}, ExpiresIn=expiration,
+                    "get_object",
+                    Params={"Bucket": self.cold_bucket, "Key": key},
+                    ExpiresIn=expiration,
                 )
+
             if tier == "supabase":
                 sb = globals().get("supabase")
                 if sb:
@@ -726,7 +742,9 @@ class StorageSystem:
                     return res.get("signedURL")
         except Exception:
             pass
+
         return None
+
     def _extract_text(self, file_data: bytes, filename: str) -> str:
         ext = filename.lower().split(".")[-1] if "." in filename else ""
         if ext == "pdf" and PDF_AVAILABLE:
@@ -755,7 +773,6 @@ class StorageSystem:
             filename = sanitize_filename(filename)
             file_hash = generate_file_hash(file_data)
 
-            # Deduplication check
             if supabase:
                 try:
                     existing = supabase.table("documents").select("id").eq("file_hash", file_hash).execute()
@@ -787,23 +804,15 @@ class StorageSystem:
             storage_key = f"blobs/{file_hash[:2]}/{file_hash[2:4]}/{file_hash}"
             target_tier = "hot" if doc_type in ["circular", "tapal", "current", "social_post"] else "cold"
 
-            # BUG FIX: track actual tier where file landed
             actual_tier = self._upload_to_storage(encrypted_file, storage_key, target_tier)
             if not actual_tier:
                 return {"success": False, "error": "All storage backends failed"}
 
-            # Store extracted text
             text_key = None
             if extracted_text:
                 ct, tm = compress_data(extracted_text.encode("utf-8", "ignore"))
                 text_key = f"text/{doc_type}/{now_utc().strftime('%Y/%m/%d')}/{uuid.uuid4().hex}.txt.{tm}"
                 self._upload_to_storage(ct, text_key, "hot")
-                try:
-                    ct, tm = compress_data(extracted_text.encode("utf-8", "ignore"))
-                    text_key = f"text/{doc_type}/{now_utc().strftime('%Y/%m/%d')}/{uuid.uuid4().hex}.txt.{tm}"
-                    self.r2.put_object(Bucket=self.hot_bucket, Key=text_key, Body=ct)
-                except Exception:
-                    pass
 
             doc_id = None
             if supabase:
@@ -817,7 +826,7 @@ class StorageSystem:
                         "compression_method": method,
                         "original_size": len(file_data),
                         "compressed_size": len(encrypted_file),
-                        "storage_tier": actual_tier,  # BUG FIX: use actual tier
+                        "storage_tier": actual_tier,
                         "uploaded_by": user_email,
                         "uploaded_at": now_utc().isoformat(),
                         "processing_status": "pending",
@@ -832,7 +841,6 @@ class StorageSystem:
             audit_log(user_email, "document.upload", "document", doc_id, {"filename": filename})
             business_metrics.increment("documents_uploaded")
 
-            # Background AI summary
             if doc_id and extracted_text:
                 def bg_task(did, text, fn):
                     try:
@@ -876,7 +884,7 @@ class StorageSystem:
             log_error("upload_failed", e)
             return {"success": False, "error": str(e)}
 
-       def download_document(self, document_id: str):
+    def download_document(self, document_id: str):
         try:
             if not supabase:
                 return None
