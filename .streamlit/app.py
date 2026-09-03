@@ -1301,11 +1301,6 @@ class MultiAI:
     def summarize(self, text):
         r = self.request(f"Summarize this in 2-3 sentences: {text[:3000]}", role="summarize")
         return r.get("response") if r.get("success") else None
-
-
-</parameter>
-
-
 ai_system = MultiAI()
 
 def agentic_web_search(query, stype="gov"):
