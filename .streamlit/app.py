@@ -2598,7 +2598,6 @@ def show_system_health():
                     redis_client.ping()
                 else:
                     redis_client.get("health_check")
-
                 st.success("✅ Redis: Connected")
             except Exception:
                 st.error("❌ Redis: Down")
@@ -2615,7 +2614,7 @@ def show_system_health():
             except Exception:
                 storage_status.append("❌ R2")
 
-                if b2_client:
+        if b2_client:
             try:
                 b2_client.list_buckets()
                 storage_status.append("✅ B2")
@@ -2634,7 +2633,6 @@ def show_system_health():
                 st.warning("⚠️ Qdrant: Disabled")
         except Exception:
             st.error("❌ Qdrant: Down")
-
 
 # ============================================================
 # OFFICE DIRECTORY HELPER
