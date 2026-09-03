@@ -2257,70 +2257,95 @@ def show_tapal():
             st.info("Supabase not configured.")
 
 
+
 def show_dispatch():
-    """BUG FIX: Printable label with audit log."""
+    """Dispatch label generator with validation, audit log, and print support."""
     u = st.session_state.user or {}
     st.markdown("### 📮 Dispatch")
 
     with st.form("dispatch_form"):
         c1, c2 = st.columns(2)
+
         with c1:
             env = st.selectbox("Envelope", ["DL", "C5", "A4"])
             seq = st.text_input("Seq No.")
+
         with c2:
             frm = st.text_area("From", value="Office of the Transport Commissioner")
+
         to = st.text_area("To", height=80)
         subj = st.text_input("Subject")
 
-     submitted = st.form_submit_button("🖨️ Generate Label")
-     if submitted:
+        submitted = st.form_submit_button("🖨️ Generate Label")
+
+        if submitted:
             if not seq or not to.strip() or not subj.strip():
                 show_toast("Seq No., To, and Subject are required", "warning")
             else:
-            safe_to, safe_frm, safe_subj = html.escape(to), html.escape(frm), html.escape(subj)
-            seat = u.get("seat_number") or (u.get("designation", "JA")[:3] if u.get("designation") else "JA")
-            dno = f"Dispatch/{u.get('section', 'A')}/{seat}/{now_utc().year}/{seq}"
+                safe_to = html.escape(to)
+                safe_frm = html.escape(frm)
+                safe_subj = html.escape(subj)
 
-            # Log to dispatch_log
-            if supabase:
-                try:
-                    supabase.table("dispatch_log").insert({
-                        "dispatch_no": dno,
-                        "envelope": env,
-                        "from_addr": frm,
-                        "to_addr": to,
-                        "subject": subj,
-                        "created_by": u.get("email", ""),
-                        "created_at": now_utc().isoformat(),
-                    }).execute()
-                except Exception:
-                    pass
-            audit_log(u.get("email", ""), "dispatch.generate", "dispatch", None, {"dispatch_no": dno})
+                seat = u.get("seat_number")
 
-            st.session_state.dispatch_ready = True
-            st.session_state.dispatch_html = f"""
-            <div style="border:2px solid #000;padding:30px;background:white;color:black;font-family:monospace;page-break-inside:avoid;">
-                <h3 style="margin:0;">DISPATCH LABEL</h3>
-                <hr>
-                <b>Dispatch No:</b> {dno}<br>
-                <b>Envelope:</b> {env}<br><br>
-                <b>From:</b><br>{safe_frm}<br><br>
-                <b>To:</b><br>{safe_to}<br><br>
-                <b>Subject:</b> {safe_subj}
-            </div>
-            """
-            show_toast("Label generated!")
+                if not seat:
+                    designation = u.get("designation", "JA") or "JA"
+                    seat = str(designation)[:3]
+
+                dno = f"Dispatch/{u.get('section', 'A')}/{seat}/{now_utc().year}/{seq}"
+
+                # Save dispatch generation to database
+                if supabase:
+                    try:
+                        supabase.table("dispatch_log").insert({
+                            "dispatch_no": dno,
+                            "envelope": env,
+                            "from_addr": frm,
+                            "to_addr": to,
+                            "subject": subj,
+                            "created_by": u.get("email", ""),
+                            "created_at": now_utc().isoformat(),
+                        }).execute()
+                    except Exception as e:
+                        st.error(f"Dispatch log error: {type(e).__name__}: {e}")
+
+                audit_log(
+                    u.get("email", ""),
+                    "dispatch.generate",
+                    "dispatch",
+                    None,
+                    {"dispatch_no": dno},
+                )
+
+                st.session_state.dispatch_ready = True
+                st.session_state.dispatch_html = f"""
+                <div style="border:2px solid #000;padding:30px;background:white;color:black;font-family:monospace;">
+                    <h3 style="margin-top:0;">DISPATCH LABEL</h3>
+                    <hr>
+                    <b>Dispatch No:</b> {dno}<br>
+                    <b>Envelope:</b> {env}<br><br>
+                    <b>From:</b><br>
+                    {safe_frm}<br><br>
+                    <b>To:</b><br>
+                    {safe_to}<br><br>
+                    <b>Subject:</b> {safe_subj}
+                </div>
+                """
+
+                show_toast("Label generated!")
 
     if st.session_state.get("dispatch_ready"):
-        st.markdown(st.session_state.dispatch_html, unsafe_allow_html=True)
-        st.markdown("""
-        <script>
-        function printLabel() { window.print(); }
-        </script>
-        """, unsafe_allow_html=True)
-        if st.button("🖨️ Print Label"):
-            components.html("<script>window.parent.print();</script>", height=0)
+        st.markdown(st.session_state.get("dispatch_html", ""), unsafe_allow_html=True)
 
+        if st.button("🖨️ Print / Save as PDF"):
+            components.html(
+                """
+                <script>
+                    window.parent.print();
+                </script>
+                """,
+                height=0,
+            )
 
 def document_card(doc):
     doc_id = str(doc.get("id", ""))
