@@ -2992,87 +2992,235 @@ def show_admin():
     # ------------------------------------------------------------
     elif section == "⚙️ AI Settings":
         st.markdown("#### ⚙️ AI API Settings")
-
-        st.markdown("##### 🧭 How work is routed")
-        st.info(
-            "**Embeddings** (search/cache): OpenAI\n\n"
-            "**Document/PDF Q&A**: DeepSeek → Qwen → backups\n\n"
-            "**Deep Search** (web via DuckDuckGo): Qwen → DeepSeek → backups\n\n"
-            "**Summarization** (on upload): DeepSeek → Qwen → backups\n\n"
-            "**Backups** (used only if the above fail): Gemini → OpenAI → Claude → Grok"
-        )
-
-        with st.form("ai_settings_form"):
-            st.markdown("##### 🔎 Embeddings — OpenAI")
-            openai_embed_key = st.text_input(
-                "OpenAI Embedding Key (leave blank to reuse the OpenAI key below)",
-                value=get_setting("OPENAI_EMBEDDING_KEY"),
-                type="password",
-            )
-
-            st.divider()
-            st.markdown("##### 📄 Document / PDF Q&A — primary: DeepSeek")
-            deepseek_key = st.text_input("DeepSeek API Key", value=get_setting("DEEPSEEK_API_KEY"), type="password")
-
-            st.divider()
-            st.markdown("##### 🌐 Deep Search — primary: Qwen")
-            qwen_key = st.text_input("Qwen API Key", value=get_setting("QWEN_API_KEY"), type="password")
-            st.caption("Web results come from DuckDuckGo — free, no key needed.")
-
-            st.divider()
-            st.markdown("##### 🔁 Backup Providers (used only when the above fail or hit limits)")
-            gemini_key = st.text_input("Gemini API Key", value=get_setting("GEMINI_API_KEY"), type="password")
-            openai_key = st.text_input("OpenAI API Key (chat backup)", value=get_setting("OPENAI_API_KEY"), type="password")
-            anthropic_key = st.text_input("Claude API Key", value=get_setting("ANTHROPIC_API_KEY"), type="password")
-            grok_key = st.text_input("Grok API Key", value=get_setting("GROK_API_KEY"), type="password")
-
-            if st.form_submit_button("💾 Save AI Settings"):
-                set_setting("OPENAI_EMBEDDING_KEY", openai_embed_key)
-                set_setting("DEEPSEEK_API_KEY", deepseek_key)
-                set_setting("QWEN_API_KEY", qwen_key)
-                set_setting("GEMINI_API_KEY", gemini_key)
-                set_setting("OPENAI_API_KEY", openai_key)
-                set_setting("ANTHROPIC_API_KEY", anthropic_key)
-                set_setting("GROK_API_KEY", grok_key)
-                show_toast("AI settings saved")
-                st.rerun()
-
-        st.divider()
-        st.markdown("##### ✅ Currently active, by role")
-        for role_label, role_key in [
-            ("Document Q&A", "doc_qa"),
-            ("Deep Search", "deep_search"),
-            ("Summarization", "summarize"),
-        ]:
-            active = ai_system.get_providers(role=role_key)
-            st.write(f"**{role_label}**: {', '.join([p['name'] for p in active]) or '❌ none configured'}")
-                    st.divider()
-        st.markdown("##### 🧪 Test AI Connection")
         
-        if st.button("Test AI Providers", key="test_ai_providers"):
-            with st.spinner("Testing AI providers..."):
-                test_results = []
+        st.info(
+            "🔑 **Add or update your API keys here.** Keys are stored securely in the database "
+            "and used automatically by the AI system. No need to edit Streamlit secrets."
+        )
+        
+        # Tab layout for better organization
+        tab1, tab2, tab3 = st.tabs(["🔑 API Keys", "🧪 Test Connection", "📊 Status"])
+        
+        with tab1:
+            st.markdown("##### 🔑 Enter Your API Keys")
+            
+            with st.form("ai_keys_form"):
+                col1, col2 = st.columns(2)
                 
-                # Check configured providers
-                for role in ["chat", "doc_qa", "deep_search", "summarize"]:
-                    providers = ai_system.get_providers(role=role)
-                    if providers:
-                        test_results.append(f"✅ {role}: {', '.join([p['name'] for p in providers])}")
-                    else:
-                        test_results.append(f"❌ {role}: No providers configured")
+                with col1:
+                    st.markdown("**Primary Providers**")
+                    deepseek_key = st.text_input(
+                        "DeepSeek API Key",
+                        value=get_setting("DEEPSEEK_API_KEY"),
+                        type="password",
+                        placeholder="sk-...",
+                        help="Primary for document Q&A. Get free key at platform.deepseek.com"
+                    )
+                    
+                    qwen_key = st.text_input(
+                        "Qwen (DashScope) API Key",
+                        value=get_setting("QWEN_API_KEY"),
+                        type="password",
+                        placeholder="sk-...",
+                        help="Primary for web search. Get free key at dashscope.aliyun.com"
+                    )
+                    
+                with col2:
+                    st.markdown("**Backup Providers** (Optional)")
+                    
+                    openai_key = st.text_input(
+                        "OpenAI API Key",
+                        value=get_setting("OPENAI_API_KEY"),
+                        type="password",
+                        placeholder="sk-...",
+                        help="Used as backup and for embeddings"
+                    )
+                    
+                    gemini_key = st.text_input(
+                        "Google Gemini API Key",
+                        value=get_setting("GEMINI_API_KEY"),
+                        type="password",
+                        placeholder="AIza...",
+                        help="Free tier available at makersuite.google.com"
+                    )
                 
-                # Test actual API call
-                test_result = ai_system.request("Say 'OK' if you can hear me", role="chat")
-                if test_result.get("success"):
-                    test_results.append(f"✅ API Call Test: Success via {test_result.get('provider')}")
+                col3, col4 = st.columns(2)
+                
+                with col3:
+                    anthropic_key = st.text_input(
+                        "Claude (Anthropic) API Key",
+                        value=get_setting("ANTHROPIC_API_KEY"),
+                        type="password",
+                        placeholder="sk-ant-...",
+                        help="Optional backup provider"
+                    )
+                    
+                with col4:
+                    grok_key = st.text_input(
+                        "Grok (xAI) API Key",
+                        value=get_setting("GROK_API_KEY"),
+                        type="password",
+                        placeholder="xai-...",
+                        help="Optional backup provider"
+                    )
+                
+                st.divider()
+                
+                col5, col6 = st.columns(2)
+                
+                with col5:
+                    serper_key = st.text_input(
+                        "Serper API Key (Web Search)",
+                        value=get_setting("SERPER_API_KEY"),
+                        type="password",
+                        placeholder="Optional - free DuckDuckGo fallback works without this",
+                        help="Get free key at serper.dev"
+                    )
+                    
+                with col6:
+                    embedding_key = st.text_input(
+                        "OpenAI Embedding Key",
+                        value=get_setting("OPENAI_EMBEDDING_KEY"),
+                        type="password",
+                        placeholder="Optional - uses OpenAI key if blank",
+                        help="For vector search and semantic caching"
+                    )
+                
+                submitted = st.form_submit_button("💾 Save All API Keys", use_container_width=True)
+                
+                if submitted:
+                    # Save all keys
+                    set_setting("DEEPSEEK_API_KEY", deepseek_key.strip())
+                    set_setting("QWEN_API_KEY", qwen_key.strip())
+                    set_setting("OPENAI_API_KEY", openai_key.strip())
+                    set_setting("GEMINI_API_KEY", gemini_key.strip())
+                    set_setting("ANTHROPIC_API_KEY", anthropic_key.strip())
+                    set_setting("GROK_API_KEY", grok_key.strip())
+                    set_setting("SERPER_API_KEY", serper_key.strip())
+                    set_setting("OPENAI_EMBEDDING_KEY", embedding_key.strip())
+                    
+                    show_toast("✅ API keys saved successfully!")
+                    st.rerun()
+            
+            # Quick links to get keys
+            with st.expander("🔗 Where to get free API keys?"):
+                st.markdown("""
+                | Provider | Free Tier | Sign Up Link |
+                |----------|-----------|--------------|
+                | **DeepSeek** | ✅ Yes (¥10 credit) | [platform.deepseek.com](https://platform.deepseek.com/) |
+                | **Qwen (DashScope)** | ✅ Yes (100K tokens) | [dashscope.aliyun.com](https://dashscope.aliyun.com/) |
+                | **Gemini** | ✅ Yes (60 req/min) | [makersuite.google.com](https://makersuite.google.com/) |
+                | **OpenAI** | ❌ No (paid) | [platform.openai.com](https://platform.openai.com/) |
+                | **Claude** | ❌ No (paid) | [console.anthropic.com](https://console.anthropic.com/) |
+                | **Grok** | ❌ No (paid) | [console.x.ai](https://console.x.ai/) |
+                """)
+        
+        with tab2:
+            st.markdown("##### 🧪 Test AI Connection")
+            
+            if st.button("🔍 Test All AI Providers", use_container_width=True):
+                with st.spinner("Testing AI providers..."):
+                    test_results = []
+                    
+                    # Check configured providers for each role
+                    for role_label, role_key in [
+                        ("💬 Chat", "chat"),
+                        ("📄 Document Q&A", "doc_qa"),
+                        ("🌐 Deep Search", "deep_search"),
+                        ("📝 Summarization", "summarize"),
+                    ]:
+                        providers = ai_system.get_providers(role=role_key)
+                        if providers:
+                            test_results.append(f"✅ {role_label}: {', '.join([p['name'] for p in providers])}")
+                        else:
+                            test_results.append(f"❌ {role_label}: No providers configured")
+                    
+                    st.markdown("**Provider Configuration:**")
+                    for result in test_results:
+                        if "✅" in result:
+                            st.success(result)
+                        else:
+                            st.error(result)
+                    
+                    # Test actual API call
+                    st.markdown("**API Call Test:**")
+                    with st.spinner("Making test API call..."):
+                        test_result = ai_system.request(
+                            "Reply with exactly: OK", 
+                            role="chat"
+                        )
+                        
+                        if test_result.get("success"):
+                            st.success(f"✅ API Call Successful via {test_result.get('provider')}")
+                            st.info(f"Response: {test_result.get('response', '')[:100]}")
+                        else:
+                            st.error(f"❌ API Call Failed: {test_result.get('error', 'Unknown error')}")
+        
+        with tab3:
+            st.markdown("##### 📊 Current Configuration Status")
+            
+            # Show current status
+            status_data = []
+            providers_config = [
+                ("DeepSeek", "DEEPSEEK_API_KEY", "Primary - Document Q&A"),
+                ("Qwen", "QWEN_API_KEY", "Primary - Web Search"),
+                ("OpenAI", "OPENAI_API_KEY", "Backup - Chat"),
+                ("Gemini", "GEMINI_API_KEY", "Backup - Free"),
+                ("Anthropic", "ANTHROPIC_API_KEY", "Backup - Optional"),
+                ("Grok", "GROK_API_KEY", "Backup - Optional"),
+                ("Serper", "SERPER_API_KEY", "Web Search API"),
+                ("OpenAI Embedding", "OPENAI_EMBEDDING_KEY", "Vector Search"),
+            ]
+            
+            for provider, setting_key, purpose in providers_config:
+                key = get_setting(setting_key)
+                status = "✅ Configured" if key else "❌ Not Configured"
+                masked_key = f"{key[:8]}...{key[-4:]}" if key and len(key) > 12 else "—"
+                status_data.append({
+                    "Provider": provider,
+                    "Purpose": purpose,
+                    "Status": status,
+                    "Key": masked_key
+                })
+            
+            df = pd.DataFrame(status_data)
+            st.dataframe(df, use_container_width=True)
+            
+            # System health indicators
+            st.divider()
+            st.markdown("**System Status:**")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if redis_client:
+                    try:
+                        redis_client.get("health_check")
+                        st.success("✅ Redis Cache: Working")
+                    except:
+                        st.error("❌ Redis Cache: Failed")
                 else:
-                    test_results.append(f"❌ API Call Test: {test_result.get('error', 'Failed')}")
-                
-                for result in test_results:
-                    if "✅" in result:
-                        st.success(result)
-                    else:
-                        st.error(result)
+                    st.warning("⚠️ Redis Cache: Not configured")
+            
+            with col2:
+                if qdrant_client:
+                    try:
+                        qdrant_client.get_collections()
+                        st.success("✅ Vector DB: Working")
+                    except:
+                        st.error("❌ Vector DB: Failed")
+                else:
+                    st.warning("⚠️ Vector DB: Not configured")
+            
+            with col3:
+                if supabase:
+                    try:
+                        supabase.table("app_settings").select("key").limit(1).execute()
+                        st.success("✅ Settings DB: Working")
+                    except:
+                        st.error("❌ Settings DB: Failed")
+                else:
+                    st.warning("⚠️ Settings DB: Not configured")
     # ------------------------------------------------------------
     # AI TRAINING
     # ------------------------------------------------------------
