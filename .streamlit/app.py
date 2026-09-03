@@ -191,7 +191,17 @@ body, .stApp {
     font-family: 'Inter', sans-serif !important;
     color: var(--text-primary) !important;
 }
-#MainMenu, footer, header { visibility: hidden !important; display: none !important; }
+   #MainMenu { visibility: hidden !important; }
+   footer { visibility: hidden !important; }
+   header[data-testid="stHeader"] {
+       background: transparent !important;
+       height: 2.5rem !important;
+   }
+   [data-testid="collapsedControl"] {
+       display: flex !important;
+       visibility: visible !important;
+       color: var(--primary) !important;
+   }
 .block-container { padding-top: 1rem !important; padding-bottom: 100px !important; max-width: 1200px; }
 .commercial-card {
     background: var(--bg-surface); border: 1px solid var(--border);
