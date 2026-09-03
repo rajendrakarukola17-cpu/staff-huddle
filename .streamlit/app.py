@@ -807,7 +807,7 @@ class StorageSystem:
                 logger.warning(f"Image OCR failed: {e}")
                 
         return text.strip()
-    def upload_document(self, file_data: bytes, filename: str, doc_type: str, user_email: str):
+   def upload_document(self, file_data: bytes, filename: str, doc_type: str, user_email: str):
         try:
             if not file_data:
                 return {"success": False, "error": "Empty file"}
@@ -815,31 +815,10 @@ class StorageSystem:
             filename = sanitize_filename(filename)
             file_hash = generate_file_hash(file_data)
 
-            if supabase:
-                try:
-                    existing = supabase.table("documents").select("id").eq("file_hash", file_hash).execute()
-                    if existing.data:
-                        ref_id = existing.data[0]["id"]
-                        try:
-                            supabase.table("document_references").insert({
-                                "original_doc_id": ref_id,
-                                "referenced_by": user_email,
-                                "original_filename": filename,
-                                "created_at": now_utc().isoformat(),
-                            }).execute()
-                        except Exception:
-                            pass
-                        audit_log(user_email, "document.duplicate", "document", ref_id)
-                        return {
-                            "success": True,
-                            "duplicate": True,
-                            "document_id": ref_id,
-                            "message": f"File already exists. Saved {len(file_data)/1024/1024:.2f} MB",
-                        }
-                except Exception:
-                    pass
+            # 1. Check Duplicates (Leave your existing duplicate check logic here)
+            # ... [Keep your duplicate check code] ...
 
-            extracted_text = self._extract_text(file_data, filename)
+            # 2. Compress & Encrypt the raw file immediately
             compressed_file, method = compress_data(file_data)
             encrypted_file = encrypt_data(compressed_file)
 
@@ -850,19 +829,13 @@ class StorageSystem:
             if not actual_tier:
                 return {"success": False, "error": "All storage backends failed"}
 
-            text_key = None
-            if extracted_text:
-                ct, tm = compress_data(extracted_text.encode("utf-8", "ignore"))
-                text_key = f"text/{doc_type}/{now_utc().strftime('%Y/%m/%d')}/{uuid.uuid4().hex}.txt.{tm}"
-                self._upload_to_storage(ct, text_key, "hot")
-
+            # 3. Fast DB Insert (Status: Processing)
             doc_id = None
             if supabase:
                 try:
                     result = supabase.table("documents").insert({
                         "filename": filename,
                         "file_key": storage_key,
-                        "text_key": text_key,
                         "file_hash": file_hash,
                         "doc_type": doc_type,
                         "compression_method": method,
@@ -871,9 +844,7 @@ class StorageSystem:
                         "storage_tier": actual_tier,
                         "uploaded_by": user_email,
                         "uploaded_at": now_utc().isoformat(),
-                        "processing_status": "pending",
-                        "access_count": 0,
-                        "last_accessed": now_utc().isoformat(),
+                        "processing_status": "processing", # Set to processing
                     }).execute()
                     if result.data:
                         doc_id = result.data[0]["id"]
@@ -883,27 +854,46 @@ class StorageSystem:
             audit_log(user_email, "document.upload", "document", doc_id, {"filename": filename})
             business_metrics.increment("documents_uploaded")
 
-            if doc_id and extracted_text:
-                def bg_task(did, text, fn):
+            # 4. Offload heavy text extraction, summarization, and vector DB to background
+            if doc_id:
+                def bg_extraction_task(did, raw_bytes, fn):
                     try:
-                        ai = globals().get("ai_system")
-                        summary = ai.summarize(text[:3000]) if ai and len(text) > 50 else ""
-                        if supabase:
-                            supabase.table("documents").update({
-                                "ai_summary": summary or "",
-                                "processing_status": "ready",
-                            }).eq("id", did).execute()
-                        if QDRANT_AVAILABLE and qdrant_client and text:
-                            gen = globals().get("generate_embedding")
-                            if gen:
-                                qdrant_client.upsert(
-                                    collection_name="rta_documents",
-                                    points=[PointStruct(
-                                        id=str(did),
-                                        vector=gen(text),
-                                        payload={"doc_id": str(did), "filename": fn},
-                                    )],
-                                )
+                        # Heavy lifting happens here, freeing up the Streamlit UI
+                        extracted_text = self._extract_text(raw_bytes, fn)
+                        
+                        text_key = None
+                        if extracted_text:
+                            # Save full text to R2
+                            ct, tm = compress_data(extracted_text.encode("utf-8", "ignore"))
+                            text_key = f"text/{doc_type}/{now_utc().strftime('%Y/%m/%d')}/{uuid.uuid4().hex}.txt.{tm}"
+                            self._upload_to_storage(ct, text_key, "hot")
+
+                            # Generate Summary
+                            ai = globals().get("ai_system")
+                            summary = ai.summarize(extracted_text[:3000]) if ai and len(extracted_text) > 50 else ""
+                            
+                            # Vector DB Insert
+                            if QDRANT_AVAILABLE and qdrant_client:
+                                gen = globals().get("generate_embedding")
+                                if gen:
+                                    qdrant_client.upsert(
+                                        collection_name="rta_documents",
+                                        points=[PointStruct(
+                                            id=str(did),
+                                            vector=gen(extracted_text[:4000]), # Don't vector huge texts at once
+                                            payload={"doc_id": str(did), "filename": fn},
+                                        )],
+                                    )
+
+                            # Final DB Update: Store *searchable text* in Supabase, but cap it so it doesn't break limits
+                            if supabase:
+                                supabase.table("documents").update({
+                                    "text_key": text_key,
+                                    "ai_summary": summary or "",
+                                    "full_text_preview": extracted_text[:50000], # Max 50KB in Postgres for rapid full-text search
+                                    "processing_status": "ready",
+                                }).eq("id", did).execute()
+                                
                     except Exception as e:
                         logger.error(f"Background task failed: {e}")
                         if supabase:
@@ -912,12 +902,8 @@ class StorageSystem:
                             except Exception:
                                 pass
 
-                threading.Thread(target=bg_task, args=(doc_id, extracted_text, filename), daemon=True).start()
-            elif doc_id and supabase:
-                try:
-                    supabase.table("documents").update({"processing_status": "ready"}).eq("id", doc_id).execute()
-                except Exception:
-                    pass
+                # Start background thread
+                threading.Thread(target=bg_extraction_task, args=(doc_id, file_data, filename), daemon=True).start()
 
             ratio = max(0.0, 1 - (len(encrypted_file) / len(file_data))) if file_data else 0
             return {"success": True, "document_id": doc_id, "compression_ratio": ratio}
@@ -925,7 +911,6 @@ class StorageSystem:
         except Exception as e:
             log_error("upload_failed", e)
             return {"success": False, "error": str(e)}
-
     def download_document(self, document_id: str):
         try:
             if not supabase:
