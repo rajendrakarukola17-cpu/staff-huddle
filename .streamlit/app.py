@@ -2615,12 +2615,13 @@ def show_system_health():
             except Exception:
                 storage_status.append("❌ R2")
 
-        if b2_client:
+                if b2_client:
             try:
                 b2_client.list_buckets()
                 storage_status.append("✅ B2")
-            except Exception:
+            except Exception as e:
                 storage_status.append("❌ B2")
+                st.error(f"B2 error: {e}")
 
         st.info("Storage: " + (" | ".join(storage_status) or "❌ None"))
 
