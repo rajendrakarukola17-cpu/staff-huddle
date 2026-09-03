@@ -813,7 +813,10 @@ class StorageSystem:
 
             # Store extracted text
             text_key = None
-            if extracted_text and self.r2:
+            if extracted_text:
+                ct, tm = compress_data(extracted_text.encode("utf-8", "ignore"))
+                text_key = f"text/{doc_type}/{now_utc().strftime('%Y/%m/%d')}/{uuid.uuid4().hex}.txt.{tm}"
+                self._upload_to_storage(ct, text_key, "hot")
                 try:
                     ct, tm = compress_data(extracted_text.encode("utf-8", "ignore"))
                     text_key = f"text/{doc_type}/{now_utc().strftime('%Y/%m/%d')}/{uuid.uuid4().hex}.txt.{tm}"
