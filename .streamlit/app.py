@@ -878,6 +878,30 @@ class StorageSystem:
 
     # ─── UPLOAD ────────────────────────────────────────────
     def _upload_to_storage(self, data: bytes, key: str, target_tier: str) -> Optional[str]:
+    # ARCHIVE TIER → Storj
+    if target_tier == "archive" and self.storj:
+        try:
+            self.storj.put_object(Bucket=self.archive_bucket, Key=key, Body=data)
+            return "archive"
+        except Exception as e:
+            logger.warning(f"Storj archive upload failed: {e}")
+
+    # PROCESSING TIER → MinIO
+    if target_tier == "processing" and self.minio:
+        try:
+            import io as _io
+            self.minio.put_object(
+                self.processing_bucket,
+                key,
+                _io.BytesIO(data),
+                length=len(data),
+            )
+            return "processing"
+        except Exception as e:
+            logger.warning(f"MinIO processing upload failed: {e}")
+    
+    # ... rest of existing code continues here
+    def _upload_to_storage(self, data: bytes, key: str, target_tier: str) -> Optional[str]:
         """Upload to preferred tier with automatic fallback chain."""
         if target_tier == "cold" and self.b2:
             try:
