@@ -1122,7 +1122,11 @@ class StorageSystem:
             storage_key = f"blobs/{file_hash[:2]}/{file_hash[2:4]}/{file_hash}"
 
             target_tier = "hot" if doc_type in ["circular", "tapal", "current", "social_post"] else "cold"
-            actual_tier = self._upload_to_storage(encrypted_file, storage_key, target_tier)
+            actual_tier = self._upload_to_storage(encrypted_file, storage_key, target_tier) 
+            # Create multi-cloud backups for critical documents
+backup_tiers = {}
+if doc_type in ["circular", "tapal"]:  # Critical documents
+    backup_tiers = self.backup_document(encrypted_file, storage_key, actual_tier)
 
             if not actual_tier:
                 return {"success": False, "error": "All storage backends failed"}
