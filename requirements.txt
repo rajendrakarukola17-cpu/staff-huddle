@@ -18,3 +18,4 @@ cryptography>=41.0.0
 zstandard>=0.22.0
 thefuzz[speedup]>=0.20.0
 sentry-sdk>=1.40.0
+pypdfium2>=4.30.0
