@@ -758,7 +758,144 @@ supabase = init_supabase()
 redis_client = init_redis()
 r2_client = init_r2()
 b2_client = init_b2()
-qdrant_client = init_qdrant()
+qdrant_client = init_qdrant() 
+# ═══════════════════════════════════════════════════════════
+# ADMIN USER INITIALIZATION
+# ═══════════════════════════════════════════════════════════
+
+def ensure_admin_user():
+    """
+    Ensure admin user exists in Supabase.
+    Creates admin from secrets if not present.
+    """
+    if not supabase:
+        logger.warning("Supabase not available for admin initialization")
+        return False
+    
+    try:
+        # Get admin credentials from secrets
+        admin_email = secret("ADMIN_EMAIL", "")
+        admin_password = secret("ADMIN_PASSWORD", "")
+        admin_name = secret("ADMIN_NAME", "System Admin")
+        admin_designation = secret("ADMIN_DESIGNATION", "System Administrator")
+        admin_level = secret("ADMIN_LEVEL", "system_admin")
+        admin_office = secret("ADMIN_OFFICE", "Head Office")
+        admin_section = secret("ADMIN_SECTION", "IT")
+        admin_seat = secret("ADMIN_SEAT", "ADMIN-01")
+        
+        if not admin_email or not admin_password:
+            logger.warning("Admin credentials not configured in secrets")
+            return False
+        
+        # Check if admin exists
+        existing = (
+            supabase.table("users")
+            .select("id, email")
+            .eq("email", admin_email.lower().strip())
+            .execute()
+        )
+        
+        if existing.data:
+            logger.info(f"Admin user already exists: {admin_email}")
+            # Update admin password if needed (optional)
+            # supabase.table("users").update({
+            #     "password_hash": hash_password(admin_password)
+            # }).eq("email", admin_email).execute()
+            return True
+        
+        # Create admin user
+        result = (
+            supabase.table("users")
+            .insert({
+                "email": admin_email.lower().strip(),
+                "name": admin_name,
+                "designation": admin_designation,
+                "office_name": admin_office,
+                "section": admin_section,
+                "seat_number": admin_seat,
+                "password_hash": hash_password(admin_password),
+                "admin_level": admin_level,
+                "active": True,
+                "created_at": now_utc().isoformat(),
+            })
+            .execute()
+        )
+        
+        if result.data:
+            logger.info(f"Admin user created: {admin_email}")
+            
+            # Log admin creation
+            audit_log(
+                admin_email,
+                "admin.initialize",
+                "user",
+                result.data[0].get("id"),
+                {"source": "secrets"}
+            )
+            
+            return True
+        else:
+            logger.error("Failed to create admin user")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Admin initialization failed: {e}")
+        return False
+
+
+# ═══════════════════════════════════════════════════════════
+# BULK USER INITIALIZATION (Optional)
+# ═══════════════════════════════════════════════════════════
+
+def ensure_default_users():
+    """
+    Create default users from secrets if configured.
+    Format: DEFAULT_USERS_JSON in secrets
+    """
+    default_users = secret("DEFAULT_USERS_JSON", "")
+    if not default_users or not supabase:
+        return
+    
+    try:
+        import json as json_lib
+        users_list = json_lib.loads(default_users)
+        
+        for user_data in users_list:
+            email = user_data.get("email", "").lower().strip()
+            name = user_data.get("name", "")
+            
+            if not email or not name:
+                continue
+            
+            # Check if exists
+            existing = (
+                supabase.table("users")
+                .select("id")
+                .eq("email", email)
+                .execute()
+            )
+            
+            if existing.data:
+                continue
+            
+            # Create user
+            supabase.table("users").insert({
+                "email": email,
+                "name": name,
+                "designation": user_data.get("designation", "Staff"),
+                "office_name": user_data.get("office_name", ""),
+                "section": user_data.get("section", ""),
+                "seat_number": user_data.get("seat_number", ""),
+                "password_hash": hash_password(user_data.get("password", "Default@123")),
+                "admin_level": user_data.get("admin_level", "staff"),
+                "active": True,
+                "created_at": now_utc().isoformat(),
+            }).execute()
+            
+            logger.info(f"Created default user: {email}")
+            
+    except Exception as e:
+        logger.error(f"Default users initialization failed: {e}")
 
 # ═══════════════════════════════════════════════════════════
 # COOKIE MANAGEMENT
