@@ -642,6 +642,92 @@ def init_b2():
         )
     except Exception:
         return None
+@st.cache_resource
+def init_storj():
+    """Storj decentralized storage via S3-compatible API."""
+    if not BOTO_AVAILABLE:
+        return None
+    try:
+        access_key = secret("STORJ_ACCESS_KEY")
+        secret_key = secret("STORJ_SECRET_KEY")
+        if not access_key or not secret_key:
+            return None
+        return boto3.client(
+            "s3",
+            endpoint_url="https://gateway.storjshare.io",
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name="global",
+        )
+    except Exception as e:
+        logger.warning(f"Storj init failed: {e}")
+        return None
+
+@st.cache_resource
+def init_minio():
+    """MinIO for local processing and caching on VPS."""
+    try:
+        from minio import Minio
+        endpoint = secret("MINIO_ENDPOINT", "localhost:9000")
+        access_key = secret("MINIO_ACCESS_KEY", "minioadmin")
+        secret_key = secret("MINIO_SECRET_KEY", "minioadmin")
+        
+        client = Minio(
+            endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
+            secure=False,
+        )
+        
+        bucket_name = secret("MINIO_BUCKET", "processing")
+        if not client.bucket_exists(bucket_name):
+            client.make_bucket(bucket_name)
+        
+        return client
+    except Exception as e:
+        logger.warning(f"MinIO init failed: {e}")
+        return None
+
+@st.cache_resource
+def init_d1():
+    """Cloudflare D1 via HTTP API for edge caching."""
+    try:
+        account_id = secret("CF_ACCOUNT_ID")
+        database_id = secret("D1_DATABASE_ID")
+        api_token = secret("CF_API_TOKEN")
+        if not all([account_id, database_id, api_token]):
+            return None
+        
+        class D1Client:
+            def __init__(self, account_id, database_id, api_token):
+                self.base_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}"
+                self.headers = {
+                    "Authorization": f"Bearer {api_token}",
+                    "Content-Type": "application/json",
+                }
+            
+            def query(self, sql, params=None):
+                try:
+                    r = requests.post(
+                        f"{self.base_url}/query",
+                        headers=self.headers,
+                        json={"sql": sql, "params": params or []},
+                        timeout=10,
+                    )
+                    if r.status_code == 200:
+                        return r.json().get("result", [])
+                    return []
+                except Exception as e:
+                    logger.warning(f"D1 query failed: {e}")
+                    return []
+            
+            def execute(self, sql, params=None):
+                return self.query(sql, params)
+        
+        return D1Client(account_id, database_id, api_token)
+    except Exception as e:
+        logger.warning(f"D1 init failed: {e}")
+        return None
 
 
 @st.cache_resource
