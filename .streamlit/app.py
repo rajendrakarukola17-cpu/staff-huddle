@@ -760,6 +760,40 @@ r2_client = init_r2()
 b2_client = init_b2()
 qdrant_client = init_qdrant() 
 # ═══════════════════════════════════════════════════════════
+# QUICK ADMIN LOGIN
+# ═══════════════════════════════════════════════════════════
+
+def quick_admin_login():
+    """
+    Check if admin credentials in secrets match.
+    Used for initial setup and admin recovery.
+    """
+    admin_email = secret("ADMIN_EMAIL", "")
+    admin_password = secret("ADMIN_PASSWORD", "")
+    
+    if not admin_email or not admin_password:
+        return False
+    
+    # Check if current login attempt matches admin
+    current_email = st.session_state.get("login_email", "").strip().lower()
+    current_password = st.session_state.get("login_password", "")
+    
+    if current_email == admin_email.lower() and current_password == admin_password:
+        # Get admin user from database
+        admin_user = get_user(admin_email)
+        if admin_user:
+            do_login(admin_user)
+            return True
+        else:
+            # Admin not in DB yet, create and login
+            ensure_admin_user()
+            admin_user = get_user(admin_email)
+            if admin_user:
+                do_login(admin_user)
+                return True
+    
+    return False
+# ═══════════════════════════════════════════════════════════
 # ADMIN USER INITIALIZATION
 # ═══════════════════════════════════════════════════════════
 
