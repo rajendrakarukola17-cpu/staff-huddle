@@ -1,4 +1,3 @@
-tesseract-ocr
-poppler-utils
-libgl1
-libglib2.0-0
+tesseract-ocr Depends libglib2.0-0t64
+but libglib2.0-0 (2.66.8) is selected for install
+and libglib2.0-0t64 Breaks libglib2.0-0 (< 2.80.0)
