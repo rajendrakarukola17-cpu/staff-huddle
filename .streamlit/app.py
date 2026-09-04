@@ -985,6 +985,37 @@ class StorageSystem:
                 pass
 
         return None
+    def _download_from_storage(self, key: str, tier: str) -> Optional[bytes]:
+    # Add after existing tier checks:
+    
+    if tier == "archive" and self.storj:
+        try:
+            return self.storj.get_object(Bucket=self.archive_bucket, Key=key)["Body"].read()
+        except Exception:
+            pass
+    
+    if tier == "processing" and self.minio:
+        try:
+            response = self.minio.get_object(self.processing_bucket, key)
+            return response.read()
+        except Exception:
+            pass
+    
+    # Add to fallback chain (after existing B2 fallback):
+    if self.storj:
+        try:
+            return self.storj.get_object(Bucket=self.archive_bucket, Key=key)["Body"].read()
+        except Exception:
+            pass
+    
+    if self.minio:
+        try:
+            response = self.minio.get_object(self.processing_bucket, key)
+            return response.read()
+        except Exception:
+            pass
+    
+    # ... rest of existing code
 
     # ─── PRESIGNED URL ─────────────────────────────────────
     def get_presigned_url(self, key: str, tier: str, expiration: int = 3600) -> Optional[str]:
