@@ -3529,7 +3529,28 @@ def get_office_directory(office_code):
             )
     except Exception:
         pass
-    return []
+    return [] 
+    if storj_client:
+    try:
+        storj_client.head_bucket(Bucket=storage_system.archive_bucket)
+        storage_status.append("✅ Storj")
+    except Exception:
+        storage_status.append("❌ Storj")
+if minio_client:
+    try:
+        minio_client.bucket_exists(storage_system.processing_bucket)
+        storage_status.append("✅ MinIO")
+    except Exception:
+        storage_status.append("❌ MinIO") 
+    # Add after Qdrant check
+if d1_client:
+    try:
+        d1_client.query("SELECT 1")
+        st.success("✅ Cloudflare D1: Connected")
+    except Exception:
+        st.error("❌ Cloudflare D1: Down")
+else:
+    st.warning("⚠️ Cloudflare D1: Not configured")
 
 
 # ═══════════════════════════════════════════════════════════
