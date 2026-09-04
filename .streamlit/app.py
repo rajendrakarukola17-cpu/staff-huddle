@@ -4520,8 +4520,19 @@ def main():
     are never locked out. Maintenance screen includes a hidden
     Admin/Staff login expander to escape maintenance mode.
     """
-    # 1. Initialize and try auto-login FIRST
+   def main():
+    # 1. Initialize session state
     init_session_state()
+    
+    # 2. Ensure admin user exists (first run only)
+    if supabase:
+        try:
+            ensure_admin_user()
+            ensure_default_users()  # Optional
+        except Exception as e:
+            logger.error(f"User initialization failed: {e}")
+    
+    # 3. Try auto-login
     try_auto_login()
 
     # 2. Check maintenance status
