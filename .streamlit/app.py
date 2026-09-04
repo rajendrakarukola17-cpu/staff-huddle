@@ -2660,7 +2660,33 @@ def show_login():
                     else:
                         increment_login_attempt(email)
                         show_toast("Invalid credentials", "error")
+def show_login():
+    # ... existing code ...
+    
+    with st.form("login_form"):
+        email = st.text_input("Email", key="login_email").strip().lower()
+        password = st.text_input("Password", type="password", key="login_password")
+        submitted = st.form_submit_button("Sign In", use_container_width=True)
 
+        if submitted:
+            # First, check if it's admin from secrets
+            if quick_admin_login():
+                st.rerun()
+            
+            # Then regular login flow
+            if not email or not password:
+                show_toast("Enter email and password", "warning")
+            elif not validate_email(email):
+                show_toast("Invalid email format", "error")
+            elif login_rate_limited(email):
+                show_toast("Too many attempts. Try again later.", "error")
+            else:
+                u = get_user(email)
+                if u and check_password(password, u.get("password_hash", "")):
+                    do_login(u)
+                else:
+                    increment_login_attempt(email)
+                    show_toast("Invalid credentials", "error")
 
 # ═══════════════════════════════════════════════════════════
 # FEED PAGE
