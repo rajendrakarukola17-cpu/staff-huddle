@@ -863,7 +863,18 @@ class StorageSystem:
     self.cold_bucket = secret("B2_BUCKET_NAME", "rta-cold-storage")
     self.archive_bucket = secret("STORJ_BUCKET_NAME", "rta-archive")
     self.processing_bucket = secret("MINIO_BUCKET", "processing")
-    self.fallback_bucket = secret("SUPABASE_BUCKET", "rta-fallback")
+    self.fallback_bucket = secret("SUPABASE_BUCKET", "rta-fallback") 
+    def backup_document(self, file_data: bytes, key: str, primary_tier: str) -> dict:
+    """Create redundant backups across multiple providers."""
+    backup_results = {}
+    
+    if primary_tier != "cold":
+        backup_results['b2'] = self._upload_to_storage(file_data, key, "cold")
+    
+    if primary_tier in ["hot", "cold"]:
+        backup_results['storj'] = self._upload_to_storage(file_data, key, "archive")
+    
+    return backup_results
 
     # ─── UPLOAD ────────────────────────────────────────────
     def _upload_to_storage(self, data: bytes, key: str, target_tier: str) -> Optional[str]:
