@@ -1425,28 +1425,25 @@ def search_documents(query: str, limit: int = 4) -> list:
 # ═══════════════════════════════════════════════════════════
 
 def auto_tier_documents() -> dict:
-    """
-    Storage cost optimization:
-      HOT → COLD: documents not accessed for 90+ days
-      COLD → HOT: frequently accessed documents (10+ accesses)
-    """
+    """Multi-cloud auto-tiering: Hot → Cold → Archive"""
     if not supabase:
         return {"error": "Supabase unavailable"}
 
     try:
-        # ── Move stale documents to cold storage ──
-        cutoff = (now_utc() - timedelta(days=90)).isoformat()
+        results = {"moved_to_cold": 0, "moved_to_archive": 0, "moved_to_hot": 0}
+
+        # HOT → COLD (90 days)
+        cutoff_90 = (now_utc() - timedelta(days=90)).isoformat()
         cold_candidates = (
             supabase.table("documents")
             .select("id, file_key")
             .eq("storage_tier", "hot")
-            .lt("last_accessed", cutoff)
+            .lt("last_accessed", cutoff_90)
             .limit(100)
             .execute()
             .data or []
         )
 
-        moved_cold = 0
         for d in cold_candidates:
             data = storage_system._download_from_storage(d["file_key"], "hot")
             if not data:
@@ -1459,8 +1456,68 @@ def auto_tier_documents() -> dict:
                 except Exception:
                     pass
                 supabase.table("documents").update({"storage_tier": "cold"}).eq("id", d["id"]).execute()
-                moved_cold += 1
+                results["moved_to_cold"] += 1
 
+        # COLD → ARCHIVE (365 days)
+        cutoff_365 = (now_utc() - timedelta(days=365)).isoformat()
+        archive_candidates = (
+            supabase.table("documents")
+            .select("id, file_key")
+            .eq("storage_tier", "cold")
+            .lt("last_accessed", cutoff_365)
+            .limit(50)
+            .execute()
+            .data or []
+        )
+
+        for d in archive_candidates:
+            data = storage_system._download_from_storage(d["file_key"], "cold")
+            if not data:
+                continue
+            actual_tier = storage_system._upload_to_storage(data, d["file_key"], "archive")
+            if actual_tier == "archive":
+                try:
+                    if b2_client:
+                        b2_client.delete_object(Bucket=storage_system.cold_bucket, Key=d["file_key"])
+                except Exception:
+                    pass
+                supabase.table("documents").update({"storage_tier": "archive"}).eq("id", d["id"]).execute()
+                results["moved_to_archive"] += 1
+
+        # Promote to HOT (10+ accesses)
+        hot_candidates = (
+            supabase.table("documents")
+            .select("id, file_key, storage_tier")
+            .in_("storage_tier", ["cold", "archive"])
+            .gte("access_count", 10)
+            .limit(50)
+            .execute()
+            .data or []
+        )
+
+        for d in hot_candidates:
+            current_tier = d.get("storage_tier", "cold")
+            data = storage_system._download_from_storage(d["file_key"], current_tier)
+            if not data:
+                continue
+            actual_tier = storage_system._upload_to_storage(data, d["file_key"], "hot")
+            if actual_tier == "hot":
+                try:
+                    if current_tier == "cold" and b2_client:
+                        b2_client.delete_object(Bucket=storage_system.cold_bucket, Key=d["file_key"])
+                    elif current_tier == "archive" and storj_client:
+                        storj_client.delete_object(Bucket=storage_system.archive_bucket, Key=d["file_key"])
+                except Exception:
+                    pass
+                supabase.table("documents").update(
+                    {"storage_tier": "hot", "access_count": 0}
+                ).eq("id", d["id"]).execute()
+                results["moved_to_hot"] += 1
+
+        return results
+
+    except Exception as e:
+        return {"error": str(e)}
         # ── Promote hot documents from cold storage ──
         hot_candidates = (
             supabase.table("documents")
