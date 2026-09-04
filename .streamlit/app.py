@@ -853,10 +853,17 @@ class StorageSystem:
     """
 
     def __init__(self):
-        self.r2 = r2_client
-        self.b2 = b2_client
-        self.hot_bucket = secret("R2_BUCKET_NAME", "rta-hot-storage")
-        self.cold_bucket = secret("B2_BUCKET_NAME", "rta-cold-storage")
+    self.r2 = r2_client
+    self.b2 = b2_client
+    self.storj = storj_client
+    self.minio = minio_client
+    self.d1 = d1_client
+    
+    self.hot_bucket = secret("R2_BUCKET_NAME", "rta-hot-storage")
+    self.cold_bucket = secret("B2_BUCKET_NAME", "rta-cold-storage")
+    self.archive_bucket = secret("STORJ_BUCKET_NAME", "rta-archive")
+    self.processing_bucket = secret("MINIO_BUCKET", "processing")
+    self.fallback_bucket = secret("SUPABASE_BUCKET", "rta-fallback")
 
     # ─── UPLOAD ────────────────────────────────────────────
     def _upload_to_storage(self, data: bytes, key: str, target_tier: str) -> Optional[str]:
