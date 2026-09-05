@@ -1548,6 +1548,8 @@ class MultiAI:
                 providers.append({"name": "Groq", "key": k, "tier": 2})
             for k in ds_best:
                 providers.append({"name": "DeepSeek", "key": k, "tier": 3})
+            for k in gm_best:  # 🔧 FIX: Gemini was missing — now answers when others fail
+                providers.append({"name": "Gemini", "key": k, "tier": 4})
         elif role == "summarize":
             for k in ds_best:
                 providers.append({"name": "DeepSeek", "key": k, "tier": 1})
