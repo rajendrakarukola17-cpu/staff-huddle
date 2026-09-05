@@ -3312,7 +3312,15 @@ def show_messages():
             web = ""
             role = "doc_qa"
 
-            if src:
+            if is_smalltalk:
+                web = ""
+                role = "chat"
+                ctx = (
+                    "The user is greeting you or making small talk. Reply with a warm 1-2 line "
+                    "greeting and suggest 2-3 example questions they can ask about leave rules, "
+                    "TA/DA or office circulars. Do NOT say 'Not found in documents'."
+                )
+            elif src:
                 ctx = (
                     "You are an internal staff knowledge assistant for a state transport "
                     "department office. Answer using ONLY the document context below. "
