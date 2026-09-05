@@ -1720,7 +1720,7 @@ class MultiAI:
             raise
 
     # ─── MAIN REQUEST WITH SMART TIERING ────────────────
-    def request(self, prompt: str, role: str = "chat") -> dict:
+       def request(self, prompt: str, role: str = "chat", provider_override: str = None, api_key_override: str = None) -> dict:
         business_metrics.increment("ai_queries_total")
         h = hashlib.md5(f"{role}:{prompt}".encode()).hexdigest()
 
