@@ -3262,23 +3262,19 @@ def show_messages():
 # AI CHAT (Document-First: Search Docs → DeepSeek → Web → Groq)
 # 🟠 FIX: Renamed variable `p` to `user_input` (shadowing fix)
 # ═══════════════════════════════════════════════════════════
-def show_ai():
-    """
-    DOCUMENT-FIRST AI FLOW:
-    1. Search Supabase documents first (keyword → fuzzy → semantic)
-    2. If found → answer with DeepSeek (doc_qa) + show sources
-    3. If not → web search → answer with Groq (deep_search)
-    """
-    st.markdown("### 🤖 AI Rules Assistant")
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
     # ── Header controls ──
-    col_h1, col_h2 = st.columns([4, 1])
+    col_h1, col_h2, col_h3, col_h4 = st.columns([2, 1, 1, 1])
     with col_h1:
         st.caption("Ask about leave rules, TA/DA, vehicle registration, or any office circular.")
     with col_h2:
+        provider_choice = st.selectbox(
+            "Model",
+            ["Auto (Smart Routing)", "Gemini", "Groq", "Qwen", "DeepSeek"],
+            key="ai_provider_ui",
+        )
+    with col_h3:
+        custom_key = st.text_input("Custom API key (optional)", type="password", key="ai_custom_key")
+    with col_h4:
         if st.button("🗑️ Clear Chat", key="clear_ai_chat"):
             st.session_state.messages = []
             st.rerun()
