@@ -1595,21 +1595,38 @@ class MultiAI:
             raise
 
     def _call_groq(self, prompt: str, key: str) -> str:
-        try:
-            r = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1000},
-                timeout=20,
-            )
-            if r.status_code == 200:
-                self._mark_key_success(key)
-                return r.json()["choices"][0]["message"]["content"].strip()
-            self._mark_key_error(key, f"HTTP {r.status_code}")
-            raise Exception(f"HTTP {r.status_code}")
-        except Exception as e:
-            self._mark_key_error(key, str(e))
-            raise
+        """Groq: settings-driven model + auto fallback (retired models → 404)."""
+        models = [
+            get_setting("groq_model", "llama-3.3-70b-versatile"),  # ← proven working model
+            "llama-3.3-70b-versatile",
+            "openai/gpt-oss-20b",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "llama-3.1-8b-instant",
+        ]
+        seen = set()
+        models = [m for m in models if not (m in seen or seen.add(m))]
+        last_err = "All Groq models unavailable"
+        for model in models:
+            try:
+                r = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 1000},
+                    timeout=20,
+                )
+                if r.status_code == 200:
+                    self._mark_key_success(key)
+                    return r.json()["choices"][0]["message"]["content"].strip()
+                if r.status_code == 404:
+                    last_err = f"{model} retired (404)"
+                    continue  # retired model → try next
+                self._mark_key_error(key, f"HTTP {r.status_code}")
+                raise Exception(f"HTTP {r.status_code}")
+            except requests.exceptions.RequestException as e:
+                self._mark_key_error(key, str(e))
+                raise
+        self._mark_key_error(key, "404")
+        raise Exception(last_err)
 
     def _call_deepseek(self, prompt: str, key: str) -> str:
         try:
