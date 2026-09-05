@@ -3239,9 +3239,19 @@ def show_dispatch():
                             "created_by": u.get("email", ""),
                             "created_at": now_utc().isoformat(),
                         }).execute()
-                    except Exception as e:
-                        st.error(f"Dispatch log error: {type(e).__name__}: {e}")
-
+                    except Exception:
+                        try:
+                            # Fallback: column may be missing in old table
+                            supabase.table("dispatch_log").insert({
+                                "dispatch_no": dno,
+                                "envelope": env,
+                                "from_addr": frm,
+                                "to_addr": to,
+                                "subject": subj,
+                                "created_by": u.get("email", ""),
+                            }).execute()
+                        except Exception as e:
+                            st.error(f"Dispatch log error: {type(e).__name__}: {e}")
                 audit_log(
                     u.get("email", ""), "dispatch.generate", "dispatch", None,
                     {"dispatch_no": dno},
