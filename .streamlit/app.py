@@ -1484,6 +1484,8 @@ class MultiAI:
         if "429" in error_type or "rate" in error_type.lower():
             health["rate_limited"] = True
             health["cooldown_until"] = time.time() + 60
+        elif "402" in error_type or "payment" in error_type.lower() or "billing" in error_type.lower():
+            health["cooldown_until"] = time.time() + 21600  # 💳 6h cooldown (no balance)
         elif "401" in error_type or "403" in error_type or "auth" in error_type.lower():
             health["cooldown_until"] = time.time() + 3600
         else:
