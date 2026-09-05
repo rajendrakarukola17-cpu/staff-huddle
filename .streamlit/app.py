@@ -1,16 +1,15 @@
 """
-RTA ANUBANDHAN — Enterprise Production Final v2.1 (Fully Patched)
-=================================================================
-COMPLETE DOCUMENT-FIRST AI SYSTEM
-✅ Multi-AI with Circuit Breakers + 10-Account Smart Auto-Tiering
+RTA ANUBANDHAN — Enterprise Production Final v3.0 (MPIN + Fully Patched)
+========================================================================
+✅ Multi-AI: 10 accounts/provider + smart tiering + model auto-fallback
+✅ MPIN security: 30-day login + MPIN on every open (forced setup)
+✅ Storj/MinIO/D1 connected with auto bucket creation
 ✅ Document Upload → Extract → Store → Search → Answer
-✅ Hot/Cold/Archive Storage Tiering (R2/B2/Storj/MinIO)
+✅ Hot/Cold/Archive Tiering (R2/B2/Storj/MinIO)
 ✅ Semantic Search (Qdrant) + Keyword + Fuzzy
-✅ Redis + Semantic Caching
-✅ Maintenance Mode with Admin Bypass
-✅ Compression + Encryption
-✅ Rate Limiting + Audit Logging
-✅ Lazy-loaded Pandas + Background Thread Delays + 3-Page OCR Limit
+✅ Redis + Semantic Caching • Maintenance Mode + Admin Bypass
+✅ Compression + Encryption • Rate Limiting + Audit Logging
+✅ Lazy Pandas • 5s Background Thread Delay • 3-Page OCR Limit
 """
 import streamlit as st
 import streamlit.components.v1 as components
@@ -32,8 +31,7 @@ from datetime import datetime, timedelta, timezone, date
 from urllib.parse import urlparse
 import numpy as np
 
-# 🐼 PATCH 3: Lazy Load Pandas (Removed top-level import to save ~50MB RAM)
-# import pandas as pd  <-- DO NOT IMPORT HERE
+# 🐼 PATCH 3: Lazy Load Pandas (NOT imported here — saves ~50MB RAM)
 
 # ═══════════════════════════════════════════════════════════
 # LOGGING
@@ -225,19 +223,14 @@ def secret(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 def get_setting(key: str, default: str = "") -> str:
-    """CHANGE 3: Get setting from session, secrets, or Supabase (Updated Priority)."""
-    # 1. Session state first
+    """Get setting from session, secrets, or Supabase (updated priority)."""
     val = st.session_state.get(f"setting_{key}")
     if val:
         return str(val)
-    
-    # 2. Streamlit secrets
     val = secret(key, "")
     if val:
         st.session_state[f"setting_{key}"] = val
         return val
-    
-    # 3. Supabase
     sb = globals().get("supabase")
     if sb:
         try:
@@ -248,7 +241,6 @@ def get_setting(key: str, default: str = "") -> str:
                 return val
         except Exception:
             pass
-    
     return default
 
 def set_setting(key: str, value: str) -> bool:
@@ -277,7 +269,8 @@ def set_setting(key: str, value: str) -> bool:
         return False
 
 def sanitize_input(text: str) -> str:
-    if not text: return ""
+    if not text:
+        return ""
     text = re.sub(r"<[^>]*>", "", str(text))
     return html.escape(text).strip()
 
@@ -289,7 +282,6 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 def sanitize_search_query(q: str) -> str:
-    # 🟡 FIX: Added length limit to prevent wildcard injection issues
     return re.sub(r"[^a-zA-Z0-9\s@#]", "", str(q or "")).strip()[:100]
 
 def generate_file_hash(file_data: bytes) -> str:
@@ -307,17 +299,24 @@ def sanitize_filename(filename: str) -> str:
 
 def show_toast(message: str, type: str = "success"):
     if hasattr(st, "toast"):
-        if type == "success": st.toast(f"✅ {message}")
-        elif type == "error": st.toast(f"❌ {message}")
-        elif type == "warning": st.toast(f"⚠️ {message}")
+        if type == "success":
+            st.toast(f"✅ {message}")
+        elif type == "error":
+            st.toast(f"❌ {message}")
+        elif type == "warning":
+            st.toast(f"⚠️ {message}")
     else:
-        if type == "success": st.success(message)
-        elif type == "error": st.error(message)
-        elif type == "warning": st.warning(message)
+        if type == "success":
+            st.success(message)
+        elif type == "error":
+            st.error(message)
+        elif type == "warning":
+            st.warning(message)
 
 def log_error(error_type, message):
     sb = globals().get("supabase")
-    if not sb: return
+    if not sb:
+        return
     try:
         sb.table("audit_logs").insert({
             "user_email": st.session_state.get("user", {}).get("email", "system"),
@@ -331,7 +330,8 @@ def log_error(error_type, message):
 
 def audit_log(email, action, rtype, rid=None, meta=None):
     sb = globals().get("supabase")
-    if not sb: return
+    if not sb:
+        return
     try:
         sb.table("audit_logs").insert({
             "user_email": email, "action": action, "resource_type": rtype,
@@ -346,9 +346,11 @@ def audit_log(email, action, rtype, rid=None, meta=None):
 # ENCRYPTION & COMPRESSION
 # ═══════════════════════════════════════════════════════════
 def get_fernet():
-    if not CRYPTO_AVAILABLE: return None
+    if not CRYPTO_AVAILABLE:
+        return None
     key = secret("ENCRYPTION_KEY", "")
-    if not key: return None
+    if not key:
+        return None
     key_bytes = hashlib.sha256(key.encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(key_bytes))
 
@@ -358,40 +360,52 @@ if os.getenv("ENVIRONMENT", "development") == "production" and not _fernet:
 
 def encrypt_data(data: bytes) -> bytes:
     if _fernet:
-        try: return _fernet.encrypt(data)
-        except Exception: pass
+        try:
+            return _fernet.encrypt(data)
+        except Exception:
+            pass
     return data
 
 def decrypt_data(data: bytes) -> bytes:
     if _fernet:
-        try: return _fernet.decrypt(data)
-        except Exception: pass
+        try:
+            return _fernet.decrypt(data)
+        except Exception:
+            pass
     return data
 
 def compress_data(data: bytes) -> Tuple[bytes, str]:
     if ZSTD_AVAILABLE:
         try:
             compressed = zstd.ZstdCompressor(level=12).compress(data)
-            if len(compressed) < len(data): return compressed, "zstd"
-        except Exception as e: logger.warning(f"Zstd compression failed: {e}")
+            if len(compressed) < len(data):
+                return compressed, "zstd"
+        except Exception as e:
+            logger.warning(f"Zstd compression failed: {e}")
     if COMPRESSION_AVAILABLE:
         try:
             compressed = lzma.compress(data, preset=6)
-            if len(compressed) < len(data): return compressed, "lzma"
-        except Exception as e: logger.warning(f"LZMA compression failed: {e}")
+            if len(compressed) < len(data):
+                return compressed, "lzma"
+        except Exception as e:
+            logger.warning(f"LZMA compression failed: {e}")
     return data, "none"
 
 def decompress_data(data: bytes, method: str) -> bytes:
     if method == "zstd" and ZSTD_AVAILABLE:
-        try: return zstd.ZstdDecompressor().decompress(data)
-        except Exception: pass
+        try:
+            return zstd.ZstdDecompressor().decompress(data)
+        except Exception:
+            pass
     elif method == "lzma" and COMPRESSION_AVAILABLE:
-        try: return lzma.decompress(data)
-        except Exception: pass
+        try:
+            return lzma.decompress(data)
+        except Exception:
+            pass
     return data
 
 # ═══════════════════════════════════════════════════════════
-# CIRCUIT BREAKER
+# CIRCUIT BREAKER (thread-safe)
 # ═══════════════════════════════════════════════════════════
 class CircuitBreaker:
     """Prevents cascading failures by tracking provider errors."""
@@ -402,7 +416,6 @@ class CircuitBreaker:
         self.failure_count = 0
         self.last_failure_time = None
         self.state = "CLOSED"
-        # 🟡 FIX: Added threading lock for thread safety in Streamlit
         self._lock = threading.Lock()
 
     def call(self, func, *args, **kwargs):
@@ -437,13 +450,12 @@ class BusinessMetrics:
             "active_users": set(),
         }
     def increment(self, metric, value=1):
-        if metric not in self.metrics: return
+        if metric not in self.metrics:
+            return
         if isinstance(self.metrics[metric], int):
             self.metrics[metric] += value
         elif isinstance(self.metrics[metric], set):
             self.metrics[metric].add(value)
-            
-    # 🟡 FIX: Added serialization method since sets aren't JSON serializable
     def to_dict(self):
         result = dict(self.metrics)
         result["active_users"] = len(result.get("active_users", set()))
@@ -452,24 +464,22 @@ class BusinessMetrics:
 business_metrics = BusinessMetrics()
 
 # ═══════════════════════════════════════════════════════════
-# CHANGE 4: ADMIN USER INITIALIZATION (Placed before service inits as requested)
+# ADMIN USER INITIALIZATION
 # ═══════════════════════════════════════════════════════════
 def ensure_admin_user():
     """Ensure admin user exists in Supabase."""
     sb = globals().get("supabase")
-    if not sb: return False
-    
+    if not sb:
+        return False
     try:
         admin_email = secret("ADMIN_EMAIL", "rajendrakarukola17@gmail.com")
         admin_password = secret("ADMIN_PASSWORD", "Admin@123")
         admin_name = secret("ADMIN_NAME", "System Admin")
-        
-        if not admin_email or not admin_password: return False
-        
+        if not admin_email or not admin_password:
+            return False
         existing = sb.table("users").select("id").eq("email", admin_email.lower()).execute()
-        if existing.data: return True
-        
-        # Note: hash_password is defined later in the file, but Python resolves it at runtime
+        if existing.data:
+            return True
         result = sb.table("users").insert({
             "email": admin_email.lower(), "name": admin_name,
             "designation": "System Administrator", "office_name": "Head Office",
@@ -478,7 +488,6 @@ def ensure_admin_user():
             "admin_level": "system_admin", "active": True,
             "created_at": now_utc().isoformat(),
         }).execute()
-        
         if result.data:
             logger.info(f"Admin created: {admin_email}")
             return True
@@ -488,56 +497,100 @@ def ensure_admin_user():
         return False
 
 # ═══════════════════════════════════════════════════════════
-# SERVICE INITIALIZATION
+# SERVICE INITIALIZATION (with bucket auto-creation)
 # ═══════════════════════════════════════════════════════════
+def _ensure_bucket(client, bucket: str):
+    """Create bucket if missing (prevents upload/download failures)."""
+    try:
+        client.head_bucket(Bucket=bucket)
+    except Exception:
+        try:
+            client.create_bucket(Bucket=bucket)
+            logger.info(f"Bucket created: {bucket}")
+        except Exception:
+            pass
+
 @st.cache_resource
 def init_supabase():
-    if not SUPABASE_LIB: return None
+    if not SUPABASE_LIB:
+        return None
     try:
         url = secret("SUPABASE_URL")
         key = secret("SUPABASE_KEY")
-        if url and key: return create_client(url, key)
-    except Exception as e: logger.error(f"Supabase init failed: {e}")
+        if url and key:
+            return create_client(url, key)
+    except Exception as e:
+        logger.error(f"Supabase init failed: {e}")
     return None
 
 @st.cache_resource
 def init_redis():
-    if not REDIS_AVAILABLE: return None
+    if not REDIS_AVAILABLE:
+        return None
     try:
         url = secret("UPSTASH_REDIS_REST_URL")
         token = secret("UPSTASH_REDIS_REST_TOKEN")
-        if url and token: return Redis(url=url, token=token)
-    except Exception: return None
+        if url and token:
+            return Redis(url=url, token=token)
+    except Exception:
+        return None
 
 @st.cache_resource
 def init_r2():
-    if not BOTO_AVAILABLE: return None
+    if not BOTO_AVAILABLE:
+        return None
     try:
         acc = secret("R2_ACCOUNT_ID"); ak = secret("R2_ACCESS_KEY_ID"); sk = secret("R2_SECRET_ACCESS_KEY")
-        if not all([acc, ak, sk]): return None
-        return boto3.client("s3", endpoint_url=f"https://{acc}.r2.cloudflarestorage.com",
-                            aws_access_key_id=ak, aws_secret_access_key=sk, region_name="auto")
-    except Exception: return None
+        if not all([acc, ak, sk]):
+            return None
+        client = boto3.client("s3", endpoint_url=f"https://{acc}.r2.cloudflarestorage.com",
+                              aws_access_key_id=ak, aws_secret_access_key=sk, region_name="auto")
+        _ensure_bucket(client, secret("R2_BUCKET_NAME", "rta-hot-storage"))
+        return client
+    except Exception:
+        return None
 
 @st.cache_resource
 def init_b2():
-    if not BOTO_AVAILABLE: return None
+    if not BOTO_AVAILABLE:
+        return None
     try:
         key_id = secret("B2_KEY_ID"); app_key = secret("B2_APPLICATION_KEY"); region = secret("B2_REGION", "us-west-002")
-        if not key_id or not app_key: return None
-        return boto3.client("s3", endpoint_url=f"https://s3.{region}.backblazeb2.com",
-                            aws_access_key_id=key_id, aws_secret_access_key=app_key, region_name=region)
-    except Exception: return None
+        if not key_id or not app_key:
+            return None
+        client = boto3.client("s3", endpoint_url=f"https://s3.{region}.backblazeb2.com",
+                              aws_access_key_id=key_id, aws_secret_access_key=app_key, region_name=region)
+        _ensure_bucket(client, secret("B2_BUCKET_NAME", "rta-cold-storage"))
+        return client
+    except Exception:
+        return None
 
 @st.cache_resource
 def init_storj():
-    if not BOTO_AVAILABLE: return None
+    """FIXED Storj: correct S3 signature config + auto bucket creation."""
+    if not BOTO_AVAILABLE:
+        logger.warning("Storj: boto3 not installed")
+        return None
+    access_key = secret("STORJ_ACCESS_KEY")
+    secret_key = secret("STORJ_SECRET_KEY")
+    if not access_key or not secret_key:
+        logger.warning("Storj: Add STORJ_ACCESS_KEY + STORJ_SECRET_KEY in secrets")
+        return None
     try:
-        access_key = secret("STORJ_ACCESS_KEY"); secret_key = secret("STORJ_SECRET_KEY")
-        if not access_key or not secret_key: return None
-        return boto3.client("s3", endpoint_url="https://gateway.storjshare.io",
-                            aws_access_key_id=access_key, aws_secret_access_key=secret_key, region_name="global")
-    except Exception as e: logger.warning(f"Storj init failed: {e}"); return None
+        from botocore.config import Config as _BotoConfig
+        client = boto3.client(
+            "s3",
+            endpoint_url="https://gateway.storjshare.io",
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name="us-east-1",
+            config=_BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+        _ensure_bucket(client, secret("STORJ_BUCKET_NAME", "rta-archive"))
+        return client
+    except Exception as e:
+        logger.warning(f"Storj init failed: {e}")
+        return None
 
 @st.cache_resource
 def init_minio():
@@ -548,61 +601,75 @@ def init_minio():
         secret_key = secret("MINIO_SECRET_KEY", "minioadmin")
         client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=False)
         bucket_name = secret("MINIO_BUCKET", "processing")
-        if not client.bucket_exists(bucket_name): client.make_bucket(bucket_name)
+        if not client.bucket_exists(bucket_name):
+            client.make_bucket(bucket_name)
         return client
-    except Exception as e: logger.warning(f"MinIO init failed: {e}"); return None
+    except Exception as e:
+        logger.warning(f"MinIO init failed: {e}")
+        return None
 
 @st.cache_resource
 def init_d1():
     try:
         account_id = secret("CF_ACCOUNT_ID"); database_id = secret("D1_DATABASE_ID"); api_token = secret("CF_API_TOKEN")
-        if not all([account_id, database_id, api_token]): return None
+        if not all([account_id, database_id, api_token]):
+            return None
         class D1Client:
             def __init__(self, account_id, database_id, api_token):
                 self.base_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}"
                 self.headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
             def query(self, sql, params=None):
                 try:
-                    r = requests.post(f"{self.base_url}/query", headers=self.headers, json={"sql": sql, "params": params or []}, timeout=10)
-                    if r.status_code == 200: return r.json().get("result", [])
+                    r = requests.post(f"{self.base_url}/query", headers=self.headers,
+                                      json={"sql": sql, "params": params or []}, timeout=10)
+                    if r.status_code == 200:
+                        return r.json().get("result", [])
                     return []
-                except Exception as e: logger.warning(f"D1 query failed: {e}"); return []
-            def execute(self, sql, params=None): return self.query(sql, params)
+                except Exception as e:
+                    logger.warning(f"D1 query failed: {e}")
+                    return []
+            def execute(self, sql, params=None):
+                return self.query(sql, params)
         return D1Client(account_id, database_id, api_token)
-    except Exception as e: logger.warning(f"D1 init failed: {e}"); return None
+    except Exception as e:
+        logger.warning(f"D1 init failed: {e}")
+        return None
 
 @st.cache_resource
 def init_qdrant():
-    if not QDRANT_AVAILABLE: return None
+    if not QDRANT_AVAILABLE:
+        return None
     try:
         url = secret("QDRANT_URL"); api_key = secret("QDRANT_API_KEY")
-        if not url or not api_key: return None
+        if not url or not api_key:
+            return None
         client = QdrantClient(url=url, api_key=api_key)
         for col in ["rta_documents", "ai_semantic_cache"]:
-            try: client.get_collection(col)
-            except Exception: client.create_collection(collection_name=col, vectors_config=VectorParams(size=768, distance=Distance.COSINE))
+            try:
+                client.get_collection(col)
+            except Exception:
+                client.create_collection(collection_name=col, vectors_config=VectorParams(size=768, distance=Distance.COSINE))
         return client
-    except Exception: return None
+    except Exception:
+        return None
 
-# Initialize all services
+# Initialize all services (CRITICAL FIX: storj/minio/d1 now initialized)
 supabase = init_supabase()
 redis_client = init_redis()
 r2_client = init_r2()
 b2_client = init_b2()
 qdrant_client = init_qdrant()
-
-# 🔴 CRITICAL FIX 1: Initialize missing storage clients
 storj_client = init_storj()
 minio_client = init_minio()
 d1_client = init_d1()
 
 # ═══════════════════════════════════════════════════════════
-# CHANGE 2: LOAD AI KEYS FROM SECRETS TO SESSION
+# LOAD AI KEYS FROM SECRETS TO SESSION
 # ═══════════════════════════════════════════════════════════
 def load_ai_keys_to_session():
     """Load AI keys from secrets to session state on startup."""
     ai_keys = [
-        "DEEPSEEK_API_KEY", "QWEN_API_KEY", "GEMINI_API_KEY", 
+        "DEEPSEEK_API_KEY", "QWEN_API_KEY", "GEMINI_API_KEY",
         "GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "SERPER_API_KEY",
     ]
     loaded = 0
@@ -615,7 +682,6 @@ def load_ai_keys_to_session():
     logger.info(f"AI keys loaded from secrets: {loaded}/{len(ai_keys)}")
     return loaded
 
-# Load keys immediately
 load_ai_keys_to_session()
 
 # ═══════════════════════════════════════════════════════════
@@ -624,38 +690,53 @@ load_ai_keys_to_session()
 class DummyCookieController:
     def get(self, name):
         val = st.session_state.get(f"_cookie_{name}")
-        if val and isinstance(val, str) and len(val) > 5: return val
+        if val and isinstance(val, str) and len(val) > 5:
+            return val
         return None
     def set(self, name, value, max_age=None):
-        if value and isinstance(value, str) and len(value) > 5: st.session_state[f"_cookie_{name}"] = value
-    def delete(self, name): st.session_state.pop(f"_cookie_{name}", None)
+        if value and isinstance(value, str) and len(value) > 5:
+            st.session_state[f"_cookie_{name}"] = value
+    def delete(self, name):
+        st.session_state.pop(f"_cookie_{name}", None)
 
 if COOKIES_LIB:
-    try: _raw_cookies = CookieController()
-    except Exception: _raw_cookies = None
+    try:
+        _raw_cookies = CookieController()
+    except Exception:
+        _raw_cookies = None
 
     class SafeCookies:
-        def __init__(self, inner): self.inner = inner
+        def __init__(self, inner):
+            self.inner = inner
         def get(self, name):
             try:
                 if self.inner and hasattr(self.inner, "get"):
                     val = self.inner.get(name)
-                    if val and isinstance(val, str) and len(val) > 5: return val
-            except Exception: pass
+                    if val and isinstance(val, str) and len(val) > 5:
+                        return val
+            except Exception:
+                pass
             return None
         def set(self, name, value, max_age=None):
             try:
                 if self.inner and hasattr(self.inner, "set"):
-                    if max_age: self.inner.set(name, value, max_age=max_age)
-                    else: self.inner.set(name, value)
+                    if max_age:
+                        self.inner.set(name, value, max_age=max_age)
+                    else:
+                        self.inner.set(name, value)
                     return
-            except Exception: pass
+            except Exception:
+                pass
             st.session_state[f"_cookie_{name}"] = value
         def delete(self, name):
             try:
-                if self.inner and hasattr(self.inner, "delete"): self.inner.delete(name); return
-            except Exception: pass
+                if self.inner and hasattr(self.inner, "delete"):
+                    self.inner.delete(name)
+                    return
+            except Exception:
+                pass
             st.session_state.pop(f"_cookie_{name}", None)
+
     cookies = SafeCookies(_raw_cookies)
 else:
     cookies = DummyCookieController()
@@ -663,9 +744,11 @@ else:
 def get_multi_keys(setting_name: str, secret_name: str = "") -> List[str]:
     """Supports comma-separated keys for multi-account rotation."""
     val = get_setting(setting_name)
-    if not val and secret_name: val = secret(secret_name)
-    if not val: return []
-    return [k.strip() for k in str(val).split(",") if k.strip()] 
+    if not val and secret_name:
+        val = secret(secret_name)
+    if not val:
+        return []
+    return [k.strip() for k in str(val).split(",") if k.strip()]
 # ═══════════════════════════════════════════════════════════
 # STORAGE SYSTEM (Hot R2 / Cold B2 / Archive Storj / Processing MinIO)
 # ═══════════════════════════════════════════════════════════
@@ -877,7 +960,7 @@ class StorageSystem:
                         images = convert_from_bytes(
                             file_data, dpi=150,
                             first_page=1,
-                            last_page=min(3, len(reader.pages))  # PATCH 2: 3 pages max
+                            last_page=min(3, len(reader.pages)),  # PATCH 2: 3 pages max
                         )
                         for img in images:
                             gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
@@ -1144,7 +1227,7 @@ def generate_embedding(text: str) -> list:
                 f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={key}",
                 json={
                     "model": "models/text-embedding-004",
-                    "content": {"parts": [{"text": text[:4000]}]},  # Increased from 2000
+                    "content": {"parts": [{"text": text[:4000]}]},
                 },
                 timeout=15,
             )
@@ -1440,6 +1523,7 @@ class MultiAI:
       • Automatic failover
       • Rate limit detection
       • Cooldown management
+      • Settings-driven models with auto fallback (retired models → 404 skip)
     """
 
     def __init__(self):
@@ -1578,7 +1662,7 @@ class MultiAI:
 
         return providers
 
-    # ─── PROVIDER CALL METHODS (FIXED MODEL NAMES) ─────
+    # ─── PROVIDER CALL METHODS (SETTINGS-DRIVEN + AUTO FALLBACK) ─────
     def _call_qwen(self, prompt: str, key: str) -> str:
         base_url = get_setting("qwen_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
         model = get_setting("qwen_model", "qwen-plus")
@@ -1719,11 +1803,12 @@ class MultiAI:
             self._mark_key_error(key, str(e))
             raise
 
-    # ─── MAIN REQUEST WITH SMART TIERING ────────────────
-       def request(self, prompt: str, role: str = "chat", provider_override: str = None, api_key_override: str = None) -> dict:
+    # ─── MAIN REQUEST WITH SMART TIERING + OVERRIDES ────
+    def request(self, prompt: str, role: str = "chat", provider_override: str = None, api_key_override: str = None) -> dict:
         business_metrics.increment("ai_queries_total")
         h = hashlib.md5(f"{role}:{prompt}".encode()).hexdigest()
 
+        # Layer 1: Redis cache
         if redis_client:
             try:
                 c = redis_client.get(f"ai_cache:{h}")
@@ -1733,6 +1818,7 @@ class MultiAI:
             except Exception:
                 pass
 
+        # Layer 2: Qdrant semantic cache
         if qdrant_client:
             try:
                 hits = qdrant_client.search(
@@ -1747,7 +1833,8 @@ class MultiAI:
             except Exception:
                 pass
 
-               providers = self.get_providers(role=role)
+        # Layer 3: Provider fallback with smart tiering
+        providers = self.get_providers(role=role)
 
         # Power-user override (model picker / custom key from AI chat UI)
         if api_key_override and provider_override:
@@ -1776,13 +1863,18 @@ class MultiAI:
                     resp = openai_breaker.call(self._call_openai, prompt, p["key"])
                 elif p["name"] == "Anthropic":
                     resp = anthropic_breaker.call(self._call_anthropic, prompt, p["key"])
+                else:
+                    resp = None
 
                 if resp:
+                    # Cache in Redis (24h)
                     if redis_client:
                         try:
                             redis_client.setex(f"ai_cache:{h}", 86400, json.dumps(resp))
                         except Exception:
                             pass
+
+                    # Cache in Qdrant
                     if qdrant_client:
                         try:
                             qdrant_client.upsert(
@@ -1795,7 +1887,14 @@ class MultiAI:
                             )
                         except Exception:
                             pass
-                    return {"success": True, "response": resp, "provider": p["name"], "tier": p.get("tier", 1)}
+
+                    return {
+                        "success": True,
+                        "response": resp,
+                        "provider": p["name"],
+                        "tier": p.get("tier", 1),
+                    }
+
             except Exception as e:
                 errors.append(f"{p['name']} (T{p.get('tier', '?')}): {str(e)[:50]}")
                 continue
@@ -1803,15 +1902,20 @@ class MultiAI:
         return {"success": False, "error": f"All providers failed: {'; '.join(errors)}"}
 
     def summarize(self, text: str) -> Optional[str]:
+        """Generate 2-3 sentence summary."""
         r = self.request(f"Summarize this in 2-3 sentences: {text[:3000]}", role="summarize")
         return r.get("response") if r.get("success") else None
 
+    # ─── HEALTH STATUS FOR ADMIN PANEL ─────────────────
     def get_health_status(self) -> dict:
+        """Get health status of all keys for admin panel."""
         status = {}
         providers = ["DeepSeek", "Qwen", "Gemini", "Groq", "OpenAI", "Anthropic"]
+
         for provider in providers:
             keys = self._get_keys(f"{provider.upper()}_API_KEY")
             provider_status = []
+
             for key in keys:
                 health = self._get_key_health(key)
                 available = self._is_key_available(key)
@@ -1822,49 +1926,29 @@ class MultiAI:
                     "success": health["success"],
                     "rate_limited": health["rate_limited"],
                 })
+
             status[provider] = {
                 "total_keys": len(keys),
                 "available_keys": sum(1 for k in provider_status if k["available"]),
                 "keys": provider_status,
             }
+
         return status
 
 
 # Initialize the AI engine
-ai_system = MultiAI() 
+ai_system = MultiAI()
 # ═══════════════════════════════════════════════════════════
-# AGENTIC WEB SEARCH (Serper + DuckDuckGo fallback)
+# AGENTIC WEB SEARCH
+# 🔄 CHANGE: DuckDuckGo = PRIMARY (free, no key) → Serper = FALLBACK
 # ═══════════════════════════════════════════════════════════
 def agentic_web_search(query: str, stype: str = "gov") -> str:
     """
-    Search the web using Serper API (if configured) or DuckDuckGo fallback.
+    Search the web using DuckDuckGo as PRIMARY (free, no key required).
+    Serper API is the FALLBACK (only if key configured and DDG fails).
     stype="gov" restricts to government websites.
     """
-    key = get_setting("SERPER_API_KEY") or secret("SERPER_API_KEY")
-
-    # ── Try Serper first ──
-    if key:
-        search_query = query
-        if stype == "gov":
-            search_query = f"{query} site:ap.gov.in OR site:gov.in"
-        try:
-            r = requests.post(
-                "https://google.serper.dev/search",
-                headers={"X-API-KEY": key, "Content-Type": "application/json"},
-                json={"q": search_query, "num": 5},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                results = r.json().get("organic", [])
-                if results:
-                    return "\n".join([
-                        f"Source: {x.get('link')}\nSnippet: {x.get('snippet')}\n"
-                        for x in results
-                    ])
-        except Exception as e:
-            logger.warning(f"Serper search failed: {e}")
-
-    # ── DuckDuckGo fallback ──
+    # ── PRIMARY: DuckDuckGo (free, no key required) ──
     try:
         ddg_query = query
         if stype == "gov":
@@ -1887,6 +1971,29 @@ def agentic_web_search(query: str, stype: str = "gov") -> str:
                 return "\n".join(results)
     except Exception as e:
         logger.warning(f"DuckDuckGo search failed: {e}")
+
+    # ── FALLBACK: Serper (only if key configured) ──
+    key = get_setting("SERPER_API_KEY") or secret("SERPER_API_KEY")
+    if key:
+        search_query = query
+        if stype == "gov":
+            search_query = f"{query} site:ap.gov.in OR site:gov.in"
+        try:
+            r = requests.post(
+                "https://google.serper.dev/search",
+                headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                json={"q": search_query, "num": 5},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                results = r.json().get("organic", [])
+                if results:
+                    return "\n".join([
+                        f"Source: {x.get('link')}\nSnippet: {x.get('snippet')}\n"
+                        for x in results
+                    ])
+        except Exception as e:
+            logger.warning(f"Serper search failed: {e}")
 
     return ""
 
@@ -1919,10 +2026,10 @@ def check_password(p: str, h: str) -> bool:
 
 
 def get_user(email: str) -> Optional[dict]:
-    """Fetch user from Redis cache or Supabase."""
+    """Fetch user from Redis cache (v3) or Supabase — includes mpin_hash."""
     if redis_client:
         try:
-            c = redis_client.get(f"user_v2:{email}")
+            c = redis_client.get(f"user_v3:{email}")
             if c:
                 return json.loads(c)
         except Exception:
@@ -1931,12 +2038,12 @@ def get_user(email: str) -> Optional[dict]:
         try:
             r = supabase.table("users").select(
                 "id, email, name, office_code, office_name, designation, "
-                "section, seat_number, admin_level, active, password_hash"
+                "section, seat_number, admin_level, active, password_hash, mpin_hash"
             ).eq("email", email).execute()
             if r.data:
                 u = r.data[0]
                 if redis_client:
-                    redis_client.setex(f"user_v2:{email}", 3600, json.dumps(u, default=str))
+                    redis_client.setex(f"user_v3:{email}", 3600, json.dumps(u, default=str))
                 return u
         except Exception:
             pass
@@ -2054,10 +2161,10 @@ def ensure_default_users():
 
 
 # ═══════════════════════════════════════════════════════════
-# SESSION MANAGEMENT
+# SESSION MANAGEMENT (30-DAY LOGIN + MPIN EVERY OPEN)
 # ═══════════════════════════════════════════════════════════
 COOKIE_NAME = "rta_session"
-SESSION_DAYS = 7
+SESSION_DAYS = 30  # 🔐 CHANGED: 7 → 30 days (MPIN protects every open)
 
 
 def init_session_state():
@@ -2069,6 +2176,8 @@ def init_session_state():
         "admin_level": "staff",
         "sidebar_open": True,
         "messages": [],
+        "mpin_verified": False,
+        "mpin_fails": 0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2076,11 +2185,10 @@ def init_session_state():
 
 
 def try_auto_login():
-    """Attempt auto-login from session cookie."""
+    """Attempt auto-login from session cookie (30-day token)."""
     if st.session_state.logged_in:
         return
 
-    # 🟡 FIX: Added try/except for token parsing
     try:
         token = cookies.get(COOKIE_NAME)
     except Exception:
@@ -2132,6 +2240,7 @@ def try_auto_login():
             st.session_state.logged_in = True
             st.session_state.user = u
             st.session_state.admin_level = u.get("admin_level", "staff")
+            # 🔐 MPIN still required on every new open (set in gate)
         else:
             try:
                 supabase.table("sessions").delete().eq("token_hash", h).execute()
@@ -2143,10 +2252,12 @@ def try_auto_login():
 
 
 def do_login(u: dict):
-    """Complete login: set session, create token, set cookie."""
+    """Complete login: set session, create 30-day token, set cookie."""
     st.session_state.logged_in = True
     st.session_state.user = u
     st.session_state.admin_level = u.get("admin_level", "staff")
+    st.session_state["mpin_verified"] = False  # 🔐 MPIN required every new open
+    st.session_state["mpin_fails"] = 0
 
     token = secrets.token_urlsafe(32)
     h = hashlib.sha256(token.encode()).hexdigest()
@@ -2201,6 +2312,98 @@ def logout():
     except Exception:
         pass
     st.rerun()
+
+
+# ═══════════════════════════════════════════════════════════
+# MPIN SYSTEM (30-day login + MPIN on every open)
+# Run SQL once: ALTER TABLE users ADD COLUMN IF NOT EXISTS mpin_hash text;
+# ═══════════════════════════════════════════════════════════
+MPIN_MAX_ATTEMPTS = 5
+
+
+def set_user_mpin(email: str, mpin: str) -> bool:
+    """Save hashed MPIN to user record."""
+    if not supabase:
+        return False
+    try:
+        supabase.table("users").update({"mpin_hash": hash_password(mpin)}).eq("email", email).execute()
+        if redis_client:
+            try:
+                redis_client.delete(f"user_v3:{email}")
+            except Exception:
+                pass
+        return True
+    except Exception as e:
+        logger.error(f"MPIN save failed: {e}")
+        return False
+
+
+def validate_mpin(user: dict, mpin: str) -> bool:
+    """Verify MPIN against stored hash."""
+    return check_password(mpin, user.get("mpin_hash", ""))
+
+
+def show_mpin_setup():
+    """Force every user (incl. admin) to create a 4-6 digit MPIN on first use."""
+    u = st.session_state.user or {}
+    st.markdown(
+        '<div style="max-width:420px;margin:60px auto;padding:30px;background:white;'
+        'border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,0.08);text-align:center;">'
+        '<div style="font-size:50px;">🔢</div><h2 style="color:#0A66C2;">Set Your MPIN</h2></div>',
+        unsafe_allow_html=True,
+    )
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        st.caption(
+            f"**{u.get('name', '')}** — your login stays for 30 days, "
+            f"but this MPIN is required every time you open the app."
+        )
+        m1 = st.text_input("Enter MPIN (4-6 digits)", type="password", key="mpin_new")
+        m2 = st.text_input("Confirm MPIN", type="password", key="mpin_confirm")
+        if st.button("✅ Save MPIN", use_container_width=True):
+            if not (m1.isdigit() and 4 <= len(m1) <= 6):
+                show_toast("MPIN must be 4-6 digits only", "error")
+            elif m1 != m2:
+                show_toast("MPINs do not match", "error")
+            elif set_user_mpin(u.get("email", ""), m1):
+                st.session_state["mpin_verified"] = True
+                st.session_state["user"] = get_user(u.get("email", "")) or u
+                show_toast("MPIN saved!")
+                st.rerun()
+            else:
+                show_toast("Could not save MPIN", "error")
+        if st.button("🚪 Logout instead", use_container_width=True):
+            logout()
+
+
+def show_mpin_unlock():
+    """MPIN lock screen on every new open (like UPI apps)."""
+    u = st.session_state.user or {}
+    st.markdown(
+        '<div style="max-width:420px;margin:60px auto;padding:30px;background:white;'
+        'border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,0.08);text-align:center;">'
+        '<div style="font-size:50px;">🔐</div><h2 style="color:#0A66C2;">Enter MPIN</h2></div>',
+        unsafe_allow_html=True,
+    )
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        st.caption(f"Welcome back, **{u.get('name', '')}**. Session active for 30 days — unlock with MPIN.")
+        m = st.text_input("MPIN", type="password", key="mpin_unlock")
+        if st.button("🔓 Unlock", use_container_width=True):
+            if validate_mpin(u, m):
+                st.session_state["mpin_verified"] = True
+                st.session_state["mpin_fails"] = 0
+                st.rerun()
+            else:
+                fails = st.session_state.get("mpin_fails", 0) + 1
+                st.session_state["mpin_fails"] = fails
+                if fails >= MPIN_MAX_ATTEMPTS:
+                    show_toast("Too many wrong MPINs — logged out", "error")
+                    logout()
+                else:
+                    show_toast(f"Wrong MPIN ({fails}/{MPIN_MAX_ATTEMPTS})", "error")
+        if st.button("🚪 Logout", use_container_width=True):
+            logout()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2368,8 +2571,7 @@ def cleanup_old_messages():
 
 
 # ═══════════════════════════════════════════════════════════
-# LOGIN PAGE
-# 🔴 FIX: Removed duplicate show_login() — keeping only ONE definition
+# LOGIN PAGE (single definition)
 # ═══════════════════════════════════════════════════════════
 def show_login():
     """Login wrapped in st.form to prevent keystroke reruns."""
@@ -2423,8 +2625,7 @@ def show_login():
 
 
 # ═══════════════════════════════════════════════════════════
-# FEED PAGE
-# 🟠 FIX: Moved st.file_uploader OUTSIDE st.form (unsupported inside forms)
+# FEED PAGE (file_uploader outside form)
 # ═══════════════════════════════════════════════════════════
 def show_feed():
     """Social feed with announcements, posts, reactions, comments."""
@@ -2481,7 +2682,7 @@ def show_feed():
         except Exception:
             filter_tag = "All"
 
-    # 🟠 FIX: File uploader moved OUTSIDE the form
+    # File uploader OUTSIDE the form (unsupported inside forms)
     file_upload = st.file_uploader("📎 Attachment", type=["jpg", "png", "pdf"], key="post_file")
 
     # ── Post composer ──
@@ -2852,9 +3053,7 @@ def show_workspace():
 
 
 # ═══════════════════════════════════════════════════════════
-# TAPAL PAGE
-# 🟠 FIX: Replaced st.stop() with conditionals
-# 🐼 PATCH 3: Lazy-loaded pandas
+# TAPAL PAGE (st.stop fix + lazy pandas)
 # ═══════════════════════════════════════════════════════════
 def _get_pandas():
     """Lazy-load pandas only when needed (saves ~50MB memory)."""
@@ -2907,7 +3106,6 @@ def show_tapal():
                     upload_error = None
 
                     if file is not None:
-                        # 🟠 FIX: Replaced st.stop() with conditional
                         if file.size > 20 * 1024 * 1024:
                             upload_error = "File too large. Max 20MB."
                         else:
@@ -2971,7 +3169,6 @@ def show_tapal():
                     .lte("tapal_date", month_end)
                     .execute().data or []
                 )
-                # 🐼 PATCH 3: Lazy load pandas
                 pd = _get_pandas()
                 df = pd.DataFrame(rows)
                 if not df.empty:
@@ -3000,8 +3197,7 @@ def show_tapal():
 
 
 # ═══════════════════════════════════════════════════════════
-# DISPATCH PAGE
-# 🟡 FIX: Improved print script JavaScript
+# DISPATCH PAGE (improved print script)
 # ═══════════════════════════════════════════════════════════
 def show_dispatch():
     """Dispatch label generator with validation, audit log, and print support."""
@@ -3069,7 +3265,6 @@ def show_dispatch():
 
     if st.session_state.get("dispatch_ready"):
         st.markdown(st.session_state.get("dispatch_html", ""), unsafe_allow_html=True)
-        # 🟡 FIX: Improved print approach
         if st.button("🖨️ Print / Save as PDF"):
             components.html(
                 """
@@ -3257,11 +3452,23 @@ def show_messages():
                 f"{html.escape(str(m.get('subject') or 'No Subject'))}"
             ):
                 st.caption(str(m.get("created_at", ""))[:16])
-                st.write(html.escape(str(m.get("body", "")))) 
-    # ═══════════════════════════════════════════════════════════
-# AI CHAT (Document-First: Search Docs → DeepSeek → Web → Groq)
-# 🟠 FIX: Renamed variable `p` to `user_input` (shadowing fix)
+                st.write(html.escape(str(m.get("body", ""))))
 # ═══════════════════════════════════════════════════════════
+# AI CHAT (Document-First + Model Picker + Custom Key + Smalltalk)
+# 🔴 FIX: `def show_ai():` restored (was missing → module-level crash)
+# ═══════════════════════════════════════════════════════════
+def show_ai():
+    """
+    DOCUMENT-FIRST AI FLOW:
+    1. Search Supabase documents first (keyword → fuzzy → semantic)
+    2. If found → answer with doc_qa chain + show sources
+    3. If not → web search (DuckDuckGo primary) → deep_search chain
+    """
+    st.markdown("### 🤖 AI Rules Assistant")
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
     # ── Header controls ──
     col_h1, col_h2, col_h3, col_h4 = st.columns([2, 1, 1, 1])
     with col_h1:
@@ -3291,11 +3498,9 @@ def show_messages():
                             f"{str(s.get('ai_summary', ''))[:150]}"
                         )
 
-    # 🟠 FIX: Renamed `p` to `user_input` to avoid shadowing
     if user_input := st.chat_input("E.g., How many days of Earned Leave can be encashed at retirement?"):
         p_clean = sanitize_input(user_input)
         st.session_state.messages.append({"role": "user", "content": p_clean})
-
         with st.chat_message("user"):
             st.markdown(p_clean)
 
@@ -3313,7 +3518,6 @@ def show_messages():
             role = "doc_qa"
 
             if is_smalltalk:
-                web = ""
                 role = "chat"
                 ctx = (
                     "The user is greeting you or making small talk. Reply with a warm 1-2 line "
@@ -3352,7 +3556,7 @@ def show_messages():
             prompt = f"{ctx}\nRecent conversation:\n{history}\nQuestion: {p_clean}"
 
             with st.spinner("Thinking..." if not src else "Checking your documents..."):
-                              override = None if provider_choice.startswith("Auto") else provider_choice
+                override = None if provider_choice.startswith("Auto") else provider_choice
                 r = ai_system.request(
                     prompt, role=role,
                     provider_override=override,
@@ -3413,8 +3617,7 @@ def show_messages():
 
 
 # ═══════════════════════════════════════════════════════════
-# GET OFFICE DIRECTORY
-# 🟠 FIX: Moved OUTSIDE show_system_health() to module level
+# GET OFFICE DIRECTORY (module level)
 # ═══════════════════════════════════════════════════════════
 def get_office_directory(office_code):
     """Fetch office directory from CF Worker or Supabase fallback."""
@@ -3445,8 +3648,7 @@ def get_office_directory(office_code):
 
 
 # ═══════════════════════════════════════════════════════════
-# SYSTEM HEALTH
-# 🟠 FIX: Added guards for storj_client, minio_client, d1_client
+# SYSTEM HEALTH (with storj/minio/d1 guards)
 # ═══════════════════════════════════════════════════════════
 def show_system_health():
     st.markdown("### 🩺 System Health Check")
@@ -3489,7 +3691,6 @@ def show_system_health():
                 storage_status.append("✅ B2")
             except Exception:
                 storage_status.append("❌ B2")
-        # 🟠 FIX: Added guards for storj and minio
         if storj_client:
             try:
                 storj_client.head_bucket(Bucket=storage_system.archive_bucket)
@@ -3514,7 +3715,6 @@ def show_system_health():
         except Exception:
             st.error("❌ Qdrant: Down")
 
-    # 🟠 FIX: Added D1 check with guard
     if d1_client:
         try:
             d1_client.query("SELECT 1")
@@ -3526,11 +3726,7 @@ def show_system_health():
 
 
 # ═══════════════════════════════════════════════════════════
-# ADMIN PANEL
-# 🟡 FIX: Password in toast → st.warning
-# 🐼 PATCH 3: Lazy-loaded pandas
-# CHANGE 6: Key count display in AI Settings
-# CHANGE 7: Key status check button
+# ADMIN PANEL (Part A: Health, Users, AI Settings, AI Training)
 # ═══════════════════════════════════════════════════════════
 RTA_ROLES = [
     "Junior Assistant (Jr Asst)",
@@ -3542,12 +3738,6 @@ RTA_ROLES = [
     "Assistant Motor Vehicle Inspector (AMVI)",
 ]
 SYSTEM_ROLES = ["staff", "office_admin", "system_admin"]
-
-
-def _get_pandas():
-    """Lazy-load pandas only when needed (saves ~50MB memory)."""
-    import pandas as pd
-    return pd
 
 
 def show_admin():
@@ -3569,7 +3759,7 @@ def show_admin():
         key="admin_section",
     )
 
-    # ── HEALTH ──
+    # ── HEALTH ─
     if section == "🩺 Health":
         st.markdown("#### 🩺 Health")
         if st.button("Check Health", key="health_check_admin"):
@@ -3599,7 +3789,7 @@ def show_admin():
         else:
             st.info("Supabase is not configured.")
 
-    # ── USERS ──
+    # ── USERS ─
     elif section == "👥 Users":
         st.markdown("#### 👥 Users")
         st.info("Passwords are stored as secure hashes. Admin cannot view passwords, but can reset them.")
@@ -3635,7 +3825,7 @@ def show_admin():
                                     "admin_level": na,
                                     "active": True,
                                 }).execute()
-                                # 🟡 FIX: Secure password display instead of toast
+                                # 🟡 FIX: Secure password display
                                 st.warning(
                                     f"⚠️ Temporary password: `{pw}` — "
                                     f"Share securely and ask user to change it."
@@ -3650,7 +3840,7 @@ def show_admin():
             )
             if csvf and st.button("Import", key="bulk_import_admin"):
                 try:
-                    pd = _get_pandas()  # 🐼 PATCH 3: Lazy load
+                    pd = _get_pandas()  # 🐼 Lazy load
                     df = pd.read_csv(csvf)
                     created = []
 
@@ -3766,14 +3956,14 @@ def show_admin():
                             ).eq("email", usr.get("email")).execute()
                         if redis_client:
                             try:
-                                redis_client.delete(f"user_v2:{usr.get('email')}")
+                                redis_client.delete(f"user_v3:{usr.get('email')}")
                             except Exception:
                                 pass
                         st.rerun()
                     except Exception:
                         show_toast("Toggle failed", "error")
 
-    # ── AI SETTINGS (CHANGE 6: Key count display + CHANGE 7: Key status) ──
+    # ── AI SETTINGS ──
     elif section == "⚙️ AI Settings":
         st.markdown("#### ⚙️ AI API Settings")
         st.info(
@@ -3786,7 +3976,7 @@ def show_admin():
         with tab1:
             st.markdown("##### 🔑 Enter Your API Keys")
 
-            # CHANGE 6: Show current key counts
+            # Key count display
             ds_count = len(ai_system._get_keys("DEEPSEEK_API_KEY"))
             qw_count = len(ai_system._get_keys("QWEN_API_KEY"))
             gm_count = len(ai_system._get_keys("GEMINI_API_KEY"))
@@ -3860,8 +4050,8 @@ def show_admin():
                         "Serper API Key (Web Search)",
                         value=get_setting("SERPER_API_KEY"),
                         type="password",
-                        placeholder="Optional - free DuckDuckGo fallback works without this",
-                        help="Get free key at serper.dev",
+                        placeholder="Optional - free DuckDuckGo primary works without this",
+                        help="Get free key at serper.dev (fallback only)",
                     )
                 with col6:
                     st.text_input(
@@ -3903,7 +4093,6 @@ def show_admin():
                 | **Claude** | ❌ Paid | [console.anthropic.com](https://console.anthropic.com/) |
                 """)
 
-        # CHANGE 7: Key status check button
         with tab2:
             st.markdown("##### 🧪 Test AI Connection")
 
@@ -3951,7 +4140,7 @@ def show_admin():
 
         with tab3:
             st.markdown("##### 📊 Current Configuration Status")
-            pd = _get_pandas()  # 🐼 PATCH 3: Lazy load
+            pd = _get_pandas()  # 🐼 Lazy load
             status_data = []
             providers_config = [
                 ("DeepSeek", "DEEPSEEK_API_KEY", "Primary - Document Q&A"),
@@ -3960,7 +4149,7 @@ def show_admin():
                 ("Groq", "GROQ_API_KEY", "Web Search Analysis"),
                 ("OpenAI", "OPENAI_API_KEY", "Backup - Chat"),
                 ("Anthropic", "ANTHROPIC_API_KEY", "Backup - Optional"),
-                ("Serper", "SERPER_API_KEY", "Web Search API"),
+                ("Serper", "SERPER_API_KEY", "Web Search Fallback"),
             ]
             for provider, setting_key, purpose in providers_config:
                 key = get_setting(setting_key)
@@ -4063,8 +4252,8 @@ def show_admin():
                     show_toast("Source removed")
                     st.rerun()
                 else:
-                    show_toast("Delete failed", "error") 
-        # ── STORAGE ──
+                    show_toast("Delete failed", "error")
+    # ── STORAGE ──
     elif section == "📊 Storage":
         st.markdown("#### 📊 Storage")
 
@@ -4509,20 +4698,17 @@ def render_sidebar_nav():
             logout()
 
         st.session_state.page = page_map.get(selected, "feed")
-
-
 # ═══════════════════════════════════════════════════════════
-# MAIN FUNCTION
-# 🔴 FIX: Removed nested main() — single clean definition
-# CHANGE 5: Updated execution order (init → admin check → auto-login)
+# MAIN FUNCTION (v3.0 — with MPIN GATE)
+# 🔴 FIX: Single clean definition (no nesting)
+# 🔐 NEW: 30-day login + MPIN required on every open
 # ═══════════════════════════════════════════════════════════
 def main():
     """
     Application entry point.
-    Login check runs BEFORE maintenance check so admins are never locked out.
-    Maintenance screen includes a hidden Admin/Staff login expander.
+    Order: init → admin ensure → auto-login → maintenance → login → MPIN gate → app.
     """
-    # 1. Initialize session state
+    # 1. Initialize session state (includes mpin_verified / mpin_fails)
     init_session_state()
 
     # 2. Ensure admin user exists (first run only)
@@ -4533,7 +4719,7 @@ def main():
         except Exception as e:
             logger.error(f"User initialization failed: {e}")
 
-    # 3. Try auto-login
+    # 3. Try auto-login (30-day cookie)
     try_auto_login()
 
     # 4. Check maintenance status
@@ -4576,7 +4762,16 @@ def main():
         show_login()
         return
 
-    # 8. Cleanup and render
+    # 8. 🔐 MPIN GATE — login stays 30 days, MPIN required every open
+    u = st.session_state.user or {}
+    if not u.get("mpin_hash"):
+        show_mpin_setup()    # first time → force every user to set MPIN
+        return
+    if not st.session_state.get("mpin_verified", False):
+        show_mpin_unlock()   # every new open → ask MPIN (5 wrong → logout)
+        return
+
+    # 9. Cleanup and render
     try:
         cleanup_old_messages()
     except Exception:
@@ -4610,3 +4805,4 @@ def main():
 # ═══════════════════════════════════════════════════════════
 if __name__ == "__main__":
     main()
+Run debug and suggest what to change why to change any error any improvement alternative in open source
