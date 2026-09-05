@@ -3352,7 +3352,12 @@ def show_messages():
             prompt = f"{ctx}\nRecent conversation:\n{history}\nQuestion: {p_clean}"
 
             with st.spinner("Thinking..." if not src else "Checking your documents..."):
-                r = ai_system.request(prompt, role=role)
+                              override = None if provider_choice.startswith("Auto") else provider_choice
+                r = ai_system.request(
+                    prompt, role=role,
+                    provider_override=override,
+                    api_key_override=custom_key.strip() or None,
+                )
 
             if r.get("success") and r.get("response"):
                 resp = r["response"]
