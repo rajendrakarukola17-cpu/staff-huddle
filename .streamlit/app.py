@@ -3300,8 +3300,15 @@ def show_messages():
             st.markdown(p_clean)
 
         with st.chat_message("assistant"):
-            # ── STEP 1: Search documents FIRST ──
-            src = search_documents(p_clean, 4)
+            # ── STEP 0: Smalltalk detection (from old working app) ──
+            SMALLTALK = {
+                "hi", "hello", "hey", "namaste", "good morning", "good afternoon",
+                "good evening", "thanks", "thank you", "ok", "okay", "test",
+            }
+            is_smalltalk = p_clean.strip().lower().rstrip("!., ") in SMALLTALK
+
+            # ── STEP 1: Search documents FIRST (skip for smalltalk) ──
+            src = [] if is_smalltalk else search_documents(p_clean, 4)
             web = ""
             role = "doc_qa"
 
