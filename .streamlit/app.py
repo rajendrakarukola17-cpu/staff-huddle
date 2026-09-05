@@ -1578,11 +1578,13 @@ class MultiAI:
 
     # ─── PROVIDER CALL METHODS (FIXED MODEL NAMES) ─────
     def _call_qwen(self, prompt: str, key: str) -> str:
+        base_url = get_setting("qwen_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        model = get_setting("qwen_model", "qwen-plus")
         try:
             r = requests.post(
-                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": "qwen-plus", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1000},
+                json={"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 1000},
                 timeout=20,
             )
             if r.status_code == 200:
