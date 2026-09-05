@@ -1747,7 +1747,17 @@ class MultiAI:
             except Exception:
                 pass
 
-        providers = self.get_providers(role=role)
+               providers = self.get_providers(role=role)
+
+        # Power-user override (model picker / custom key from AI chat UI)
+        if api_key_override and provider_override:
+            providers = [{"name": provider_override, "key": api_key_override, "tier": 0}] + providers
+        elif provider_override:
+            providers = sorted(
+                providers,
+                key=lambda p: 0 if p["name"].lower() == provider_override.lower() else 1,
+            )
+
         if not providers:
             return {"success": False, "error": "No API keys configured. Add keys in Admin Panel → AI Settings."}
 
