@@ -1646,22 +1646,40 @@ class MultiAI:
             raise
 
     def _call_gemini(self, prompt: str, key: str) -> str:
-        try:
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}",
-                json={"contents": [{"parts": [{"text": prompt}]}]},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                if "candidates" in data and data["candidates"]:
-                    self._mark_key_success(key)
-                    return data["candidates"][0]["content"]["parts"][0]["text"]
-            self._mark_key_error(key, f"HTTP {r.status_code}")
-            raise Exception(f"HTTP {r.status_code}")
-        except Exception as e:
-            self._mark_key_error(key, str(e))
-            raise
+        """Gemini: settings-driven model + auto fallback (1.5-flash retired)."""
+        models = [
+            get_setting("gemini_model", "gemini-2.0-flash"),  # ← proven working model
+            "gemini-2.0-flash",
+            "gemini-2.5-flash",
+            "gemini-1.5-flash",
+        ]
+        seen = set()
+        models = [m for m in models if not (m in seen or seen.add(m))]
+        last_err = "All Gemini models unavailable"
+        for model in models:
+            try:
+                r = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+                    json={"contents": [{"parts": [{"text": prompt}]}]},
+                    timeout=15,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if data.get("candidates"):
+                        self._mark_key_success(key)
+                        return data["candidates"][0]["content"]["parts"][0]["text"]
+                    last_err = "Empty candidates"
+                    continue
+                if r.status_code == 404:
+                    last_err = f"{model} retired (404)"
+                    continue
+                self._mark_key_error(key, f"HTTP {r.status_code}")
+                raise Exception(f"HTTP {r.status_code}")
+            except requests.exceptions.RequestException as e:
+                self._mark_key_error(key, str(e))
+                raise
+        self._mark_key_error(key, "404")
+        raise Exception(last_err)
 
     def _call_openai(self, prompt: str, key: str) -> str:
         try:
